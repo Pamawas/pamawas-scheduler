@@ -8,13 +8,11 @@ import (
 	"log"
 	"net/http"
 	"os"
-	"strconv"
 	"strings"
 	"sync"
 	"time"
 
 	_ "github.com/lib/pq"
-	"github.com/google/uuid"
 )
 
 // SchedulerConfig holds configuration for the scheduler service
