@@ -4,7 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
-	"log"
+	"net/http"
 	"strings"
 	"sync"
 	"time"
@@ -101,11 +101,11 @@ func (s *Scheduler) StartWorker() {
 	for {
 		select {
 		case <-s.ctx.Done():
-			log.Println("Scheduler worker stopped")
+			log.Info().Msg("Scheduler worker stopped")
 			return
 		case <-ticker.C:
 			if err := s.checkAndTrigger(); err != nil {
-				log.Printf("Scheduler check error: %v", err)
+				log.Error().Err(err).Msg("Scheduler check error")
 			}
 		}
 	}
@@ -141,9 +141,9 @@ func (s *Scheduler) checkAndTrigger() error {
 			// Check if we already sent today's report
 			today := now.Format("2006-01-02")
 			if s.lastDailyReport.Format("2006-01-02") != today {
-				log.Printf("Time for daily report (%s)", s.config.DailyReportTime)
-				if err := s.triggerDailyReport(); err != nil {
-					log.Printf("Failed to trigger daily report: %v", err)
+				log.Info().Str("time", s.config.DailyReportTime).Msg("Time for daily report")
+				if err := s.TriggerDailyReport(); err != nil {
+					log.Error().Err(err).Msg("Failed to trigger daily report")
 				} else {
 					s.mu.Lock()
 					s.lastDailyReport = now
@@ -158,7 +158,7 @@ func (s *Scheduler) checkAndTrigger() error {
 	// Check for high severity incidents
 	if s.config.EnableHighSeverityAlert {
 		if err := s.checkHighSeverityIncidents(); err != nil {
-			log.Printf("Failed to check high severity incidents: %v", err)
+			log.Error().Err(err).Msg("Failed to check high severity incidents")
 		} else {
 			s.mu.Lock()
 			s.lastHighSeverityCheck = now
@@ -171,18 +171,18 @@ func (s *Scheduler) checkAndTrigger() error {
 	return nil
 }
 
-// triggerDailyReport triggers a daily report via the reporter service
-func (s *Scheduler) triggerDailyReport() error {
-	log.Printf("Triggering daily report")
+// TriggerDailyReport triggers a daily report via the reporter service
+func (s *Scheduler) TriggerDailyReport() error {
+	log.Info().Msg("Triggering daily report")
 	if err := s.reporter.TriggerDailyReport(); err != nil {
 		return err
 	}
 	return nil
 }
 
-// triggerHighSeverityAlert triggers a high severity alert via the reporter service
-func (s *Scheduler) triggerHighSeverityAlert() error {
-	log.Printf("Triggering high severity alert")
+// TriggerHighSeverityAlert triggers a high severity alert via the reporter service
+func (s *Scheduler) TriggerHighSeverityAlert() error {
+	log.Info().Msg("Triggering high severity alert")
 	if err := s.reporter.TriggerHighSeverityAlert(); err != nil {
 		return err
 	}
@@ -217,12 +217,15 @@ func (s *Scheduler) checkHighSeverityIncidents() error {
 	}
 
 	if count > 0 {
-		log.Printf("Found %d %s+ firing incidents in the last hour - triggering high severity alert", count, threshold)
-		if err := s.triggerHighSeverityAlert(); err != nil {
-			return err
+			log.Info().
+				Int("count", count).
+				Str("threshold", threshold).
+				Msg("Found firing incidents in the last hour - triggering high severity alert")
+			if err := s.TriggerHighSeverityAlert(); err != nil {
+				return err
+			}
+			s.metrics.HighSeverityAlertsTotal.Inc()
 		}
-		s.metrics.HighSeverityAlertsTotal.Inc()
-	}
 
 	return nil
 }

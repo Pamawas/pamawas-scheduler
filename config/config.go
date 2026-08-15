@@ -2,13 +2,14 @@ package config
 
 import (
 	"os"
-	"strconv"
 	"time"
 )
 
 type Config struct {
 	DatabaseURL           string
 	Port                  string
+	LogLevel              string
+	Environment           string
 	ReporterURL           string
 	DailyReportTime       string
 	HighSeverityThreshold string
@@ -19,13 +20,14 @@ type Config struct {
 }
 
 func Load() Config {
-	port, _ := strconv.Atoi(getEnv("PORT", "8080"))
 	intervalStr := getEnv("CHECK_INTERVAL", "30s")
 	interval, _ := time.ParseDuration(intervalStr)
 
 	cfg := Config{
 		DatabaseURL:           getEnv("DATABASE_URL", ""),
 		Port:                  getEnv("PORT", "8080"),
+		LogLevel:              getEnv("LOG_LEVEL", "info"),
+		Environment:           getEnv("ENVIRONMENT", "development"),
 		ReporterURL:           getEnv("REPORTER_URL", "http://localhost:8081"),
 		DailyReportTime:       getEnv("DAILY_REPORT_TIME", "07:00"),
 		HighSeverityThreshold: getEnv("HIGH_SEVERITY_THRESHOLD", "high"),

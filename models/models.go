@@ -13,6 +13,7 @@ type HealthResponse struct {
 	Running                  bool      `json:"running"`
 	Uptime                   string    `json:"uptime,omitempty"`
 	Version                  string    `json:"version,omitempty"`
+	Error                    string    `json:"error,omitempty"`
 }
 
 // ReadyResponse represents the readiness check response
