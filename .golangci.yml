@@ -1,11 +1,9 @@
-# .golangci.yml - golangci-lint configuration for Pamawas correlator
+# .golangci.yml - golangci-lint configuration for Pamawas scheduler
 # See https://golangci-lint.run/docs/configuration/ for all options
 
 version: "2"
 
 linters:
-  # Enable only safe linters by default
-  disable-all: true
   enable:
     - errcheck
     - gosec
@@ -44,7 +42,4 @@ issues:
 
 run:
   timeout: 5m
-  skip-dirs:
-    - vendor
-    - .git
   modules-download-mode: readonly
