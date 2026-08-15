@@ -28,21 +28,28 @@ type SchedulerConfig struct {
 type ReporterClient struct {
 	baseURL    string
 	httpClient *http.Client
+	ctx        context.Context
 }
 
-func NewReporterClient(baseURL string) *ReporterClient {
+func NewReporterClient(baseURL string, ctx context.Context) *ReporterClient {
 	return &ReporterClient{
 		baseURL: baseURL,
 		httpClient: &http.Client{Timeout: 10 * time.Second},
+		ctx:     ctx,
 	}
 }
 
 func (c *ReporterClient) TriggerDailyReport() error {
-	resp, err := c.httpClient.Post(c.baseURL+"/report", "application/json", strings.NewReader(`{"source":"scheduler"}`))
+	req, err := http.NewRequestWithContext(c.ctx, http.MethodPost, c.baseURL+"/report", strings.NewReader(`{"source":"scheduler"}`))
 	if err != nil {
 		return err
 	}
-	defer resp.Body.Close()
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		return fmt.Errorf("reporter returned status %d", resp.StatusCode)
 	}
@@ -50,11 +57,16 @@ func (c *ReporterClient) TriggerDailyReport() error {
 }
 
 func (c *ReporterClient) TriggerHighSeverityAlert() error {
-	resp, err := c.httpClient.Post(c.baseURL+"/report", "application/json", strings.NewReader(`{"source":"scheduler","priority":"high"}`))
+	req, err := http.NewRequestWithContext(c.ctx, http.MethodPost, c.baseURL+"/report", strings.NewReader(`{"source":"scheduler","priority":"high"}`))
 	if err != nil {
 		return err
 	}
-	defer resp.Body.Close()
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		return fmt.Errorf("reporter returned status %d", resp.StatusCode)
 	}
@@ -80,8 +92,7 @@ type Scheduler struct {
 // NewScheduler creates a new scheduler instance
 func NewScheduler(db *sql.DB, cfg SchedulerConfig, m *metrics.Metrics) *Scheduler {
 	ctx, cancel := context.WithCancel(context.Background())
-	reporter := NewReporterClient(cfg.ReporterURL)
-
+	reporter := NewReporterClient(cfg.ReporterURL, ctx)
 	return &Scheduler{
 		db:       db,
 		config:   cfg,
@@ -211,21 +222,21 @@ func (s *Scheduler) checkHighSeverityIncidents() error {
 	since := time.Now().Add(-1 * time.Hour)
 
 	var count int
-	err := s.db.QueryRow(query, threshold, since).Scan(&count)
+	err := s.db.QueryRowContext(s.ctx, query, threshold, since).Scan(&count)
 	if err != nil {
 		return err
 	}
 
 	if count > 0 {
-			log.Info().
-				Int("count", count).
-				Str("threshold", threshold).
-				Msg("Found firing incidents in the last hour - triggering high severity alert")
-			if err := s.TriggerHighSeverityAlert(); err != nil {
-				return err
-			}
-			s.metrics.HighSeverityAlertsTotal.Inc()
+		log.Info().
+			Int("count", count).
+			Str("threshold", threshold).
+			Msg("Found firing incidents in the last hour - triggering high severity alert")
+		if err := s.TriggerHighSeverityAlert(); err != nil {
+			return err
 		}
+		s.metrics.HighSeverityAlertsTotal.Inc()
+	}
 
 	return nil
 }

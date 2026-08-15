@@ -40,7 +40,7 @@ func main() {
 	if err != nil {
 		log.Fatal().Err(err).Msg("Error opening database")
 	}
-	defer db.Close()
+	defer func() { _ = db.Close() }()
 
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
