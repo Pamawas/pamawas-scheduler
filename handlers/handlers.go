@@ -57,10 +57,12 @@ func (h *Handler) HealthHandler(w http.ResponseWriter, r *http.Request) {
 		h.metrics.DBConnectionErrors.Inc()
 		log.Error().Err(err).Msg("Health check failed: database connection")
 		w.WriteHeader(http.StatusServiceUnavailable)
-		_ = json.NewEncoder(w).Encode(models.HealthResponse{
+		if encodeErr := json.NewEncoder(w).Encode(models.HealthResponse{
 			Status: "unhealthy",
 			Error:  fmt.Sprintf("Database connection failed: %v", err),
-		})
+		}); encodeErr != nil {
+			log.Error().Err(encodeErr).Msg("Failed to encode health response")
+		}
 		return
 	}
 
@@ -71,14 +73,16 @@ func (h *Handler) HealthHandler(w http.ResponseWriter, r *http.Request) {
 	h.scheduler.MuUnlock()
 
 	w.WriteHeader(http.StatusOK)
-	_ = json.NewEncoder(w).Encode(models.HealthResponse{
+	if err := json.NewEncoder(w).Encode(models.HealthResponse{
 		Status:                   "healthy",
 		Timestamp:                time.Now().UTC(),
 		LastDailyReport:          lastDailyReport,
 		LastHighSeverityCheck:    lastHighSeverityCheck,
 		Running:                  running,
 		Version:                  "1.0.0",
-	})
+	}); err != nil {
+		log.Error().Err(err).Msg("Failed to encode health response")
+	}
 }
 
 // ReadyHandler handles readiness check requests
@@ -92,15 +96,19 @@ func (h *Handler) ReadyHandler(w http.ResponseWriter, r *http.Request) {
 	if err := h.db.PingContext(r.Context()); err != nil {
 		log.Error().Err(err).Msg("Readiness check failed: database not ready")
 		w.WriteHeader(http.StatusServiceUnavailable)
-		_ = json.NewEncoder(w).Encode(models.ReadyResponse{
+		if encodeErr := json.NewEncoder(w).Encode(models.ReadyResponse{
 			Status: "not ready",
 			Error:  fmt.Sprintf("Database not ready: %v", err),
-		})
+		}); encodeErr != nil {
+			log.Error().Err(encodeErr).Msg("Failed to encode ready response")
+		}
 		return
 	}
 
 	w.WriteHeader(http.StatusOK)
-	_ = json.NewEncoder(w).Encode(models.ReadyResponse{Status: "ready"})
+	if err := json.NewEncoder(w).Encode(models.ReadyResponse{Status: "ready"}); err != nil {
+		log.Error().Err(err).Msg("Failed to encode ready response")
+	}
 }
 
 // TriggerDailyHandler handles manual daily report triggers
@@ -117,9 +125,11 @@ func (h *Handler) TriggerDailyHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	w.WriteHeader(http.StatusAccepted)
-	_ = json.NewEncoder(w).Encode(models.TriggerResponse{
+	if err := json.NewEncoder(w).Encode(models.TriggerResponse{
 		Message: "Daily report triggered successfully",
-	})
+	}); err != nil {
+		log.Error().Err(err).Msg("Failed to encode trigger response")
+	}
 }
 
 // TriggerHighSeverityHandler handles manual high severity alert triggers
@@ -136,9 +146,11 @@ func (h *Handler) TriggerHighSeverityHandler(w http.ResponseWriter, r *http.Requ
 	}
 
 	w.WriteHeader(http.StatusAccepted)
-	_ = json.NewEncoder(w).Encode(models.TriggerResponse{
+	if err := json.NewEncoder(w).Encode(models.TriggerResponse{
 		Message: "High severity alert triggered successfully",
-	})
+	}); err != nil {
+		log.Error().Err(err).Msg("Failed to encode trigger response")
+	}
 }
 
 // StatusHandler returns the current status of the scheduler
@@ -152,13 +164,15 @@ func (h *Handler) StatusHandler(w http.ResponseWriter, r *http.Request) {
 	h.scheduler.MuLock()
 	defer h.scheduler.MuUnlock()
 
-	_ = json.NewEncoder(w).Encode(models.StatusResponse{
+	if err := json.NewEncoder(w).Encode(models.StatusResponse{
 		LastDailyReport:       h.scheduler.LastDailyReport(),
 		LastHighSeverityCheck: h.scheduler.LastHighSeverityCheck(),
 		Running:               h.scheduler.Running(),
 		Uptime:                time.Since(h.scheduler.StartTime()).String(),
 		Version:               "1.0.0",
-	})
+	}); err != nil {
+		log.Error().Err(err).Msg("Failed to encode status response")
+	}
 }
 
 // MetricsHandler returns the Prometheus metrics handler
@@ -166,7 +180,7 @@ func (h *Handler) MetricsHandler() http.Handler {
 	return promhttp.Handler()
 }
 
-// Reporter returns the scheduler for access in main.go
+// Scheduler returns the scheduler for access in main.go
 func (h *Handler) Scheduler() *service.Scheduler {
 	return h.scheduler
 }

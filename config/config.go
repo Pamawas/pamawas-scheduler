@@ -1,6 +1,7 @@
 package config
 
 import (
+	"fmt"
 	"os"
 	"time"
 )
@@ -21,7 +22,10 @@ type Config struct {
 
 func Load() Config {
 	intervalStr := getEnv("CHECK_INTERVAL", "30s")
-	interval, _ := time.ParseDuration(intervalStr)
+	interval, err := time.ParseDuration(intervalStr)
+	if err != nil {
+		panic(fmt.Sprintf("invalid CHECK_INTERVAL: %v", err))
+	}
 
 	cfg := Config{
 		DatabaseURL:           getEnv("DATABASE_URL", ""),

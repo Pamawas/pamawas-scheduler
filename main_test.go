@@ -15,7 +15,11 @@ func TestNewScheduler(t *testing.T) {
 	if err != nil {
 		t.Skipf("Skipping test: cannot open database: %v", err)
 	}
-	defer func() { _ = db.Close() }()
+	defer func() {
+		if closeErr := db.Close(); closeErr != nil {
+			t.Logf("Failed to close database: %v", closeErr)
+		}
+	}()
 	s := service.NewScheduler(db, service.SchedulerConfig{}, nil)
 	if s == nil {
 		t.Error("NewScheduler returned nil")
