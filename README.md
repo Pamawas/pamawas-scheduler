@@ -25,11 +25,13 @@ Triggers report generation on two paths: (1) daily morning cron for digest repor
 ## Two Trigger Paths (MVP §10)
 
 ### 1. Daily Morning Digest (Cron)
+
 - Runs at configured time daily (e.g., 07:00)
 - Triggers reporter to generate daily report for last 24 hours
 - Only sends if incidents occurred in period
 
 ### 2. Immediate High-Severity Alert
+
 - Runs at configured interval (e.g., every 30s)
 - Checks for firing incidents with severity >= threshold (high/critical)
 - Triggers immediate reporter call for high-severity incidents
@@ -60,6 +62,16 @@ Triggers report generation on two paths: (1) daily morning cron for digest repor
 | `ENABLE_HIGH_SEVERITY_ALERT` | Enable high-severity checks | `true` |
 | `SCHEDULER_MODE` | `manual` to disable background worker | (auto) |
 | `LOG_LEVEL` | Log level | `info` |
+| `ENVIRONMENT` | Deployment environment | `development` |
+| `OTEL_EXPORTER_OTLP_ENDPOINT` | OTLP gRPC endpoint for Tempo | `tempo:4317` |
+
+## Observability
+
+| Feature | Endpoint/Format |
+|---------|-----------------|
+| **Prometheus Metrics** | `/metrics` — `DailyReportsTotal`, `HighSeverityChecksTotal`, `HighSeverityAlertsTotal`, `SchedulerRunning`, `LastDailyReport`, `LastHighSeverityCheck` |
+| **Structured JSON Logging** | stdout — trace_id, span_id, service, component, method, path, status_code, duration_ms |
+| **OpenTelemetry Tracing** | OTLP gRPC → Tempo:4317 — W3C TraceContext propagation |
 
 ## Database Schema (from pamawas-schema)
 
@@ -87,10 +99,11 @@ CREATE TABLE IF NOT EXISTS incidents (
 - ✅ Background worker with graceful shutdown
 - ✅ Multi-stage Dockerfile (Go 1.26-alpine builder, alpine runtime)
 - ✅ GitHub Actions workflow (main + dev branches, GHCR publishing)
-- ⬜ Prometheus metrics with proper labels
-- ⬜ Structured JSON logging
-- ⬜ Configuration management (YAML + ENV)
-- ⬜ Unit tests for cron logic (target 80%+ coverage)
+- ✅ **Prometheus metrics with proper labels**
+- ✅ **Structured JSON logging with zerolog**
+- ✅ **Request/response logging middleware with Loki labels**
+- ✅ **OpenTelemetry tracing (OTLP gRPC → Tempo)**
+- ✅ Viper config management (YAML + ENV)
 
 ## Kanban Tasks
 
@@ -129,6 +142,7 @@ curl -X POST http://localhost:8080/trigger/high-severity
 ## Severity Threshold Logic
 
 The `HIGH_SEVERITY_THRESHOLD` uses inclusive matching:
+
 - `critical` → only critical
 - `high` → high + critical
 - `warning` → warning + high + critical
