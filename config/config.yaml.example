@@ -1,0 +1,14 @@
+# pamawas-scheduler configuration
+# Copy this to config.yaml and adjust values, or use environment variables with PAMAWAS_SCHEDULER_ prefix
+
+database_url: "postgres://pamawas:pamawas@localhost:5432/pamawas?sslmode=disable"
+port: "8080"
+log_level: "info"
+environment: "development"
+reporter_url: "http://localhost:8081"
+daily_report_time: "07:00"
+high_severity_threshold: "high"
+check_interval: "30s"
+enable_daily_report: true
+enable_high_severity_alert: true
+mode: "auto"

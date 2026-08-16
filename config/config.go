@@ -2,8 +2,9 @@ package config
 
 import (
 	"fmt"
-	"os"
 	"time"
+
+	"github.com/spf13/viper"
 )
 
 type Config struct {
@@ -21,35 +22,67 @@ type Config struct {
 }
 
 func Load() Config {
-	intervalStr := getEnv("CHECK_INTERVAL", "30s")
-	interval, err := time.ParseDuration(intervalStr)
+	v := viper.New()
+	v.SetConfigName("config")
+	v.SetConfigType("yaml")
+	v.AddConfigPath(".")
+	v.AddConfigPath("./config")
+	v.AddConfigPath("/etc/pamawas/")
+	v.SetEnvPrefix("PAMAWAS_SCHEDULER")
+	v.AutomaticEnv()
+
+	// Defaults
+	v.SetDefault("port", "8080")
+	v.SetDefault("log_level", "info")
+	v.SetDefault("environment", "development")
+	v.SetDefault("reporter_url", "http://localhost:8081")
+	v.SetDefault("daily_report_time", "07:00")
+	v.SetDefault("high_severity_threshold", "high")
+	v.SetDefault("check_interval", "30s")
+	v.SetDefault("enable_daily_report", true)
+	v.SetDefault("enable_high_severity_alert", true)
+	v.SetDefault("mode", "auto")
+
+	if err := v.ReadInConfig(); err != nil {
+		if _, ok := err.(viper.ConfigFileNotFoundError); !ok {
+			panic(fmt.Sprintf("failed to read config: %v", err))
+		}
+	}
+
+	checkInterval, err := time.ParseDuration(v.GetString("check_interval"))
 	if err != nil {
-		panic(fmt.Sprintf("invalid CHECK_INTERVAL: %v", err))
+		panic(fmt.Sprintf("invalid check_interval: %v", err))
 	}
 
 	cfg := Config{
-		DatabaseURL:           getEnv("DATABASE_URL", ""),
-		Port:                  getEnv("PORT", "8080"),
-		LogLevel:              getEnv("LOG_LEVEL", "info"),
-		Environment:           getEnv("ENVIRONMENT", "development"),
-		ReporterURL:           getEnv("REPORTER_URL", "http://localhost:8081"),
-		DailyReportTime:       getEnv("DAILY_REPORT_TIME", "07:00"),
-		HighSeverityThreshold: getEnv("HIGH_SEVERITY_THRESHOLD", "high"),
-		CheckInterval:         interval,
-		EnableDailyReport:     getEnv("ENABLE_DAILY_REPORT", "true") == "true",
-		EnableHighSeverityAlert: getEnv("ENABLE_HIGH_SEVERITY_ALERT", "true") == "true",
-		Mode:                  getEnv("SCHEDULER_MODE", "auto"),
+		DatabaseURL:            v.GetString("database_url"),
+		Port:                   v.GetString("port"),
+		LogLevel:               v.GetString("log_level"),
+		Environment:            v.GetString("environment"),
+		ReporterURL:            v.GetString("reporter_url"),
+		DailyReportTime:        v.GetString("daily_report_time"),
+		HighSeverityThreshold:  v.GetString("high_severity_threshold"),
+		CheckInterval:          checkInterval,
+		EnableDailyReport:      v.GetBool("enable_daily_report"),
+		EnableHighSeverityAlert: v.GetBool("enable_high_severity_alert"),
+		Mode:                   v.GetString("mode"),
 	}
 
 	if cfg.DatabaseURL == "" {
-		panic("DATABASE_URL environment variable not set")
+		panic("DATABASE_URL not set (config file or PAMAWAS_SCHEDULER_DATABASE_URL env var)")
 	}
 	return cfg
 }
 
-func getEnv(key, fallback string) string {
-	if v := os.Getenv(key); v != "" {
-		return v
+func (c Config) Validate() error {
+	if c.DatabaseURL == "" {
+		return fmt.Errorf("database_url is required")
 	}
-	return fallback
+	if c.Port == "" {
+		return fmt.Errorf("port is required")
+	}
+	if c.CheckInterval <= 0 {
+		return fmt.Errorf("check_interval must be positive")
+	}
+	return nil
 }

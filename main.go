@@ -16,11 +16,30 @@ import (
 	"github.com/Pamawas/pamawas-scheduler/config"
 	"github.com/Pamawas/pamawas-scheduler/handlers"
 	"github.com/Pamawas/pamawas-scheduler/metrics"
+	"github.com/Pamawas/pamawas-scheduler/middleware"
+	"github.com/Pamawas/pamawas-scheduler/otel"
 )
 
 func main() {
 	cfg := config.Load()
 	initLogger(cfg)
+
+	// Initialize OpenTelemetry tracing
+	otelShutdown, err := otel.InitTracer(otel.Config{
+		ServiceName:  "pamawas-scheduler",
+		OTLPEndpoint: os.Getenv("OTEL_EXPORTER_OTLP_ENDPOINT"),
+		Insecure:     true,
+		SampleRatio:  1.0,
+		Enabled:      os.Getenv("OTEL_EXPORTER_OTLP_ENDPOINT") != "",
+	})
+	if err != nil {
+		log.Fatal().Err(err).Msg("Failed to initialize OpenTelemetry")
+	}
+	defer func() {
+		if err := otelShutdown(context.Background()); err != nil {
+			log.Error().Err(err).Msg("Error shutting down OpenTelemetry")
+		}
+	}()
 
 	log.Info().
 		Str("port", cfg.Port).
@@ -83,10 +102,15 @@ func main() {
 	r.HandleFunc("/status", h.StatusHandler)
 	r.Handle("/metrics", h.MetricsHandler())
 
+	// Wrap router with middleware
+	var handler http.Handler = r
+	handler = middleware.LoggingMiddleware("pamawas-scheduler", handler)
+	handler = middleware.ErrorLoggingMiddleware("pamawas-scheduler", handler)
+
 	// Create server
 	srv := &http.Server{
 		Addr:         ":" + cfg.Port,
-		Handler:      r,
+		Handler:      handler,
 		ReadTimeout:  15 * time.Second,
 		WriteTimeout: 15 * time.Second,
 		IdleTimeout:  60 * time.Second,
