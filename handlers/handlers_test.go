@@ -37,7 +37,11 @@ func newTestHandler(t *testing.T, cfg config.Config) (*Handler, sqlmock.Sqlmock)
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { _ = db.Close() })
+	t.Cleanup(func() {
+		if err := db.Close(); err != nil {
+			t.Logf("failed to close db: %v", err)
+		}
+	})
 	return NewHandler(db, cfg, handlerMetrics()), mock
 }
 
@@ -64,7 +68,7 @@ func TestHandlersRejectWrongMethods(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			rr := httptest.NewRecorder()
-			tc.fn(rr, httptest.NewRequest(tc.method, "/", nil))
+			tc.fn(rr, httptest.NewRequestWithContext(t.Context(), tc.method, "/", nil))
 			if rr.Code != http.StatusMethodNotAllowed {
 				t.Fatalf("status=%d", rr.Code)
 			}
@@ -76,9 +80,11 @@ func TestHealthHandlerHealthy(t *testing.T) {
 	h, mock := newTestHandler(t, config.Config{})
 	mock.ExpectPing()
 	rr := httptest.NewRecorder()
-	h.HealthHandler(rr, httptest.NewRequest(http.MethodGet, "/healthz", nil))
+	h.HealthHandler(rr, httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/healthz", nil))
 	var response models.HealthResponse
-	_ = json.NewDecoder(rr.Body).Decode(&response)
+	if err := json.NewDecoder(rr.Body).Decode(&response); err != nil {
+		t.Fatalf("decode error: %v", err)
+	}
 	if rr.Code != http.StatusOK || response.Status != "healthy" || response.Version != "1.0.0" || response.Timestamp.IsZero() {
 		t.Fatalf("response=%d %+v", rr.Code, response)
 	}
@@ -88,7 +94,7 @@ func TestHealthHandlerUnhealthy(t *testing.T) {
 	h, mock := newTestHandler(t, config.Config{})
 	mock.ExpectPing().WillReturnError(errors.New("down"))
 	rr := httptest.NewRecorder()
-	h.HealthHandler(rr, httptest.NewRequest(http.MethodGet, "/healthz", nil))
+	h.HealthHandler(rr, httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/healthz", nil))
 	if rr.Code != http.StatusServiceUnavailable || testutil.ToFloat64(h.metrics.DBConnectionErrors) != 1 {
 		t.Fatalf("status=%d metric=%v", rr.Code, testutil.ToFloat64(h.metrics.DBConnectionErrors))
 	}
@@ -99,7 +105,7 @@ func TestReadyHandler(t *testing.T) {
 		h, m := newTestHandler(t, config.Config{})
 		m.ExpectPing()
 		rr := httptest.NewRecorder()
-		h.ReadyHandler(rr, httptest.NewRequest(http.MethodGet, "/ready", nil))
+		h.ReadyHandler(rr, httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/ready", nil))
 		if rr.Code != http.StatusOK || rr.Body.String() != "{\"status\":\"ready\"}\n" {
 			t.Fatalf("response=%d %q", rr.Code, rr.Body.String())
 		}
@@ -108,7 +114,7 @@ func TestReadyHandler(t *testing.T) {
 		h, m := newTestHandler(t, config.Config{})
 		m.ExpectPing().WillReturnError(errors.New("down"))
 		rr := httptest.NewRecorder()
-		h.ReadyHandler(rr, httptest.NewRequest(http.MethodGet, "/ready", nil))
+		h.ReadyHandler(rr, httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/ready", nil))
 		if rr.Code != http.StatusServiceUnavailable {
 			t.Fatalf("status=%d", rr.Code)
 		}
@@ -126,7 +132,7 @@ func TestCreateDailyReportRequest(t *testing.T) {
 
 	body := `{"report_date":"2026-08-16","timezone":"Asia/Jakarta"}`
 	rr := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodPost, "/v1/report-requests/daily", strings.NewReader(body))
+	req := httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/v1/report-requests/daily", strings.NewReader(body))
 	h.CreateDailyReportRequest(rr, req)
 
 	require.Equal(t, http.StatusAccepted, rr.Code)
@@ -144,21 +150,21 @@ func TestCreateDailyReportRequest_MissingFields(t *testing.T) {
 	// Missing report_date
 	body := `{"timezone":"UTC"}`
 	rr := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodPost, "/v1/report-requests/daily", strings.NewReader(body))
+	req := httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/v1/report-requests/daily", strings.NewReader(body))
 	h.CreateDailyReportRequest(rr, req)
 	require.Equal(t, http.StatusBadRequest, rr.Code)
 
 	// Missing timezone
 	body = `{"report_date":"2026-08-16"}`
 	rr = httptest.NewRecorder()
-	req = httptest.NewRequest(http.MethodPost, "/v1/report-requests/daily", strings.NewReader(body))
+	req = httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/v1/report-requests/daily", strings.NewReader(body))
 	h.CreateDailyReportRequest(rr, req)
 	require.Equal(t, http.StatusBadRequest, rr.Code)
 
 	// Invalid JSON
 	body = `{invalid`
 	rr = httptest.NewRecorder()
-	req = httptest.NewRequest(http.MethodPost, "/v1/report-requests/daily", strings.NewReader(body))
+	req = httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/v1/report-requests/daily", strings.NewReader(body))
 	h.CreateDailyReportRequest(rr, req)
 	require.Equal(t, http.StatusBadRequest, rr.Code)
 }
@@ -172,7 +178,7 @@ func TestCreateDailyReportRequest_Duplicate(t *testing.T) {
 
 	body := `{"report_date":"2026-08-16","timezone":"Asia/Jakarta"}`
 	rr := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodPost, "/v1/report-requests/daily", strings.NewReader(body))
+	req := httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/v1/report-requests/daily", strings.NewReader(body))
 	h.CreateDailyReportRequest(rr, req)
 
 	require.Equal(t, http.StatusOK, rr.Code)
@@ -196,7 +202,7 @@ func TestCreateHighSeverityReportRequest(t *testing.T) {
 
 	body := `{"incident_ids":["inc_01TEST123456789012345678901234"],"evaluate":false}`
 	rr := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodPost, "/v1/report-requests/high-severity", strings.NewReader(body))
+	req := httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/v1/report-requests/high-severity", strings.NewReader(body))
 	h.CreateHighSeverityReportRequest(rr, req)
 
 	require.Equal(t, http.StatusAccepted, rr.Code)
@@ -221,7 +227,7 @@ func TestCreateHighSeverityReportRequest_Evaluate(t *testing.T) {
 
 	body := `{"evaluate":true}`
 	rr := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodPost, "/v1/report-requests/high-severity", strings.NewReader(body))
+	req := httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/v1/report-requests/high-severity", strings.NewReader(body))
 	h.CreateHighSeverityReportRequest(rr, req)
 
 	require.Equal(t, http.StatusAccepted, rr.Code)
@@ -238,7 +244,7 @@ func TestCreateHighSeverityReportRequest_NoEligible(t *testing.T) {
 
 	body := `{"evaluate":true}`
 	rr := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodPost, "/v1/report-requests/high-severity", strings.NewReader(body))
+	req := httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/v1/report-requests/high-severity", strings.NewReader(body))
 	h.CreateHighSeverityReportRequest(rr, req)
 
 	require.Equal(t, http.StatusAccepted, rr.Code)
@@ -253,7 +259,7 @@ func TestCreateHighSeverityReportRequest_InvalidJSON(t *testing.T) {
 
 	body := `{invalid`
 	rr := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodPost, "/v1/report-requests/high-severity", strings.NewReader(body))
+	req := httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/v1/report-requests/high-severity", strings.NewReader(body))
 	h.CreateHighSeverityReportRequest(rr, req)
 	require.Equal(t, http.StatusBadRequest, rr.Code)
 }
@@ -261,7 +267,7 @@ func TestCreateHighSeverityReportRequest_InvalidJSON(t *testing.T) {
 func TestStatusAndMetricsHandlers(t *testing.T) {
 	h, _ := newTestHandler(t, config.Config{})
 	rr := httptest.NewRecorder()
-	h.StatusHandler(rr, httptest.NewRequest(http.MethodGet, "/status", nil))
+	h.StatusHandler(rr, httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/status", nil))
 	var response models.StatusResponse
 	require.NoError(t, json.NewDecoder(rr.Body).Decode(&response))
 	require.Equal(t, "1.0.0", response.Version)

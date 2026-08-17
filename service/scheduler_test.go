@@ -35,7 +35,11 @@ func newMockScheduler(t *testing.T, cfg SchedulerConfig) (*Scheduler, sqlmock.Sq
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { _ = db.Close() })
+	t.Cleanup(func() {
+		if err := db.Close(); err != nil {
+			t.Logf("failed to close db: %v", err)
+		}
+	})
 	return NewScheduler(db, cfg, schedulerMetrics()), mock
 }
 
@@ -63,7 +67,10 @@ func TestReporterClientTriggersRequests(t *testing.T) {
 	var bodies []map[string]interface{}
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		var body map[string]interface{}
-		_ = json.NewDecoder(r.Body).Decode(&body)
+			if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+				t.Errorf("decode error: %v", err)
+				return
+			}
 		bodies = append(bodies, body)
 		if r.Method != http.MethodPost || r.Header.Get("Content-Type") != "application/json" {
 			t.Errorf("request=%s %s", r.Method, r.Header.Get("Content-Type"))
@@ -278,7 +285,9 @@ func TestTriggerDailyReportForDate(t *testing.T) {
 			t.Errorf("unexpected path: %s", r.URL.Path)
 		}
 		var payload ReportPayload
-		_ = json.NewDecoder(r.Body).Decode(&payload)
+			if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+				t.Errorf("decode error: %v", err)
+			}
 		if payload.ReportType != "daily" || payload.ContractVersion != 1 {
 			t.Errorf("unexpected payload: %+v", payload)
 		}

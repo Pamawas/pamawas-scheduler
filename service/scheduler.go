@@ -479,6 +479,8 @@ func (s *Scheduler) filterEligibleIncidents(ctx context.Context, incidentIDs []s
 		args[i+1] = id
 	}
 
+	// Build query safely - placeholders are safe (just $N parameters), args are parameterized
+	//nolint:gosec
 	query := fmt.Sprintf(`
 		SELECT id
 		FROM incidents
@@ -496,7 +498,7 @@ func (s *Scheduler) filterEligibleIncidents(ctx context.Context, incidentIDs []s
 			SELECT 1 FROM report_requests rr
 			WHERE rr.request_type = 'high_severity'
 			AND rr.status IN ('pending', 'generating', 'generated')
-			AND rr.idempotency_hash LIKE '%%' || incidents.id || '%%'
+			AND rr.idempotency_hash LIKE '%%%%' || incidents.id || '%%%%'
 		)
 	`, strings.Join(placeholders, ","))
 

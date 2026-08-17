@@ -1,10 +1,11 @@
 package service
 
 import (
+	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/binary"
 	"fmt"
-	"math/rand"
 	"sync"
 	"time"
 
@@ -93,7 +94,6 @@ const ReportPolicyVersion = 1
 
 // ULID generation for request IDs
 var (
-	ulidRand = rand.New(rand.NewSource(time.Now().UnixNano()))
 	ulidMu   sync.Mutex
 	ulidTime uint64
 	ulidSeq  uint64
@@ -127,13 +127,24 @@ func generateULID(prefix string) string {
 	}
 
 	// Random/sequence for remaining 16 chars (80 bits)
-	randVal := ulidRand.Uint64()
-	randVal2 := ulidRand.Uint64()
-	combined := (randVal << 16) | (randVal2 >> 48) | (ulidSeq << 48)
-
-	for i := 25; i >= 10; i-- {
-		result[i] = encoding[combined&31]
-		combined >>= 5
+	var randBytes [10]byte
+	if _, err := rand.Read(randBytes[:]); err != nil {
+		// Fallback to time-based if crypto/rand fails
+		randVal := time.Now().UnixNano()
+		randVal2 := time.Now().UnixNano() + 1
+		combined := (uint64(randVal) << 16) | (uint64(randVal2) >> 48) | (ulidSeq << 48)
+		for i := 25; i >= 10; i-- {
+			result[i] = encoding[combined&31]
+			combined >>= 5
+		}
+	} else {
+		// Use first 8 bytes for random, last 2 for sequence
+		combined := binary.BigEndian.Uint64(randBytes[:8])
+		combined = (combined << 16) | (ulidSeq & 0xFFFF)
+		for i := 25; i >= 10; i-- {
+			result[i] = encoding[combined&31]
+			combined >>= 5
+		}
 	}
 
 	return prefix + "_" + string(result)

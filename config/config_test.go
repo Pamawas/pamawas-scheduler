@@ -16,7 +16,11 @@ func inTempDir(t *testing.T) {
 	if err := os.Chdir(t.TempDir()); err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { _ = os.Chdir(old) })
+	t.Cleanup(func() {
+		if err := os.Chdir(old); err != nil {
+			t.Logf("failed to chdir back: %v", err)
+		}
+	})
 }
 
 func TestLoadDefaultsAndEnvironmentOverrides(t *testing.T) {
@@ -38,8 +42,14 @@ func TestLoadPanicsWithoutDatabaseURL(t *testing.T) {
 	inTempDir(t)
 	t.Setenv("PAMAWAS_SCHEDULER_DATABASE_URL", "")
 	defer func() {
-		if got := recover(); got == nil || !strings.Contains(got.(string), "DATABASE_URL not set") {
-			t.Fatalf("panic = %v", got)
+		var got interface{}
+		if got = recover(); got == nil {
+			t.Fatalf("expected panic, got nil")
+			return
+		}
+		msg, ok := got.(string)
+		if !ok || !strings.Contains(msg, "DATABASE_URL not set") {
+			t.Fatalf("unexpected panic: %v", got)
 		}
 	}()
 	Load()
@@ -50,8 +60,14 @@ func TestLoadPanicsForInvalidInterval(t *testing.T) {
 	t.Setenv("PAMAWAS_SCHEDULER_DATABASE_URL", "db")
 	t.Setenv("PAMAWAS_SCHEDULER_CHECK_INTERVAL", "later")
 	defer func() {
-		if got := recover(); got == nil || !strings.Contains(got.(string), "invalid check_interval") {
-			t.Fatalf("panic = %v", got)
+		var got interface{}
+		if got = recover(); got == nil {
+			t.Fatalf("expected panic, got nil")
+			return
+		}
+		msg, ok := got.(string)
+		if !ok || !strings.Contains(msg, "invalid check_interval") {
+			t.Fatalf("unexpected panic: %v", got)
 		}
 	}()
 	Load()

@@ -100,8 +100,10 @@ func TestComputeHighSeverityPeriod(t *testing.T) {
 }
 
 func TestGenerateIdempotencyHash(t *testing.T) {
-	periodStart, _ := time.Parse(time.RFC3339, "2026-08-15T17:00:00Z")
-	periodEnd, _ := time.Parse(time.RFC3339, "2026-08-16T17:00:00Z")
+	periodStart, err := time.Parse(time.RFC3339, "2026-08-15T17:00:00Z")
+	require.NoError(t, err)
+	periodEnd, err := time.Parse(time.RFC3339, "2026-08-16T17:00:00Z")
+	require.NoError(t, err)
 
 	hash1 := GenerateIdempotencyHash("daily", periodStart, periodEnd, "Asia/Jakarta", 1)
 	hash2 := GenerateIdempotencyHash("daily", periodStart, periodEnd, "Asia/Jakarta", 1)

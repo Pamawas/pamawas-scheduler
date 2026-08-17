@@ -23,7 +23,7 @@ func TestLoggingMiddlewareAddsContextAndLogsResponse(t *testing.T) {
 		logger.Info().Msg("inside")
 		w.WriteHeader(http.StatusCreated)
 	})
-	req := httptest.NewRequest(http.MethodPost, "/items?q=1", nil)
+	req := httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/items?q=1", nil)
 	req.Header.Set("X-Trace-ID", "trace-123")
 	rr := httptest.NewRecorder()
 	LoggingMiddleware("scheduler", next).ServeHTTP(rr, req)
@@ -47,9 +47,11 @@ func TestLoggingMiddlewareGeneratesTraceID(t *testing.T) {
 	old := log.Logger
 	log.Logger = zerolog.New(&output)
 	t.Cleanup(func() { log.Logger = old })
-	LoggingMiddleware("scheduler", http.HandlerFunc(func(http.ResponseWriter, *http.Request) {})).ServeHTTP(httptest.NewRecorder(), httptest.NewRequest(http.MethodGet, "/", nil))
+	LoggingMiddleware("scheduler", http.HandlerFunc(func(http.ResponseWriter, *http.Request) {})).ServeHTTP(httptest.NewRecorder(), httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/", nil))
 	var entry map[string]interface{}
-	_ = json.Unmarshal(output.Bytes(), &entry)
+	if err := json.Unmarshal(output.Bytes(), &entry); err != nil {
+		t.Fatal(err)
+	}
 	if trace, ok := entry["trace_id"].(string); !ok || len(trace) != 8 {
 		t.Fatalf("trace = %#v", entry["trace_id"])
 	}
@@ -61,7 +63,7 @@ func TestErrorLoggingMiddlewareRecoversPanic(t *testing.T) {
 	log.Logger = zerolog.New(&output)
 	t.Cleanup(func() { log.Logger = old })
 	rr := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodGet, "/panic", nil)
+	req := httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/panic", nil)
 	req.Header.Set("X-Trace-ID", "panic-trace")
 	ErrorLoggingMiddleware("scheduler", http.HandlerFunc(func(http.ResponseWriter, *http.Request) { panic("boom") })).ServeHTTP(rr, req)
 	if rr.Code != http.StatusInternalServerError || !bytes.Contains(output.Bytes(), []byte("Panic recovered")) {
