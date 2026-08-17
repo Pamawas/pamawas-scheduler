@@ -27,11 +27,11 @@ type Handler struct {
 // NewHandler creates a new handler with dependencies
 func NewHandler(db *sql.DB, cfg config.Config, m *metrics.Metrics) *Handler {
 	schedulerCfg := service.SchedulerConfig{
-		ReporterURL:            cfg.ReporterURL,
-		DailyReportTime:        cfg.DailyReportTime,
-		HighSeverityThreshold:  cfg.HighSeverityThreshold,
-		CheckInterval:          cfg.CheckInterval,
-		EnableDailyReport:      cfg.EnableDailyReport,
+		ReporterURL:             cfg.ReporterURL,
+		DailyReportTime:         cfg.DailyReportTime,
+		HighSeverityThreshold:   cfg.HighSeverityThreshold,
+		CheckInterval:           cfg.CheckInterval,
+		EnableDailyReport:       cfg.EnableDailyReport,
 		EnableHighSeverityAlert: cfg.EnableHighSeverityAlert,
 	}
 
@@ -74,12 +74,12 @@ func (h *Handler) HealthHandler(w http.ResponseWriter, r *http.Request) {
 
 	w.WriteHeader(http.StatusOK)
 	if err := json.NewEncoder(w).Encode(models.HealthResponse{
-		Status:                   "healthy",
-		Timestamp:                time.Now().UTC(),
-		LastDailyReport:          lastDailyReport,
-		LastHighSeverityCheck:    lastHighSeverityCheck,
-		Running:                  running,
-		Version:                  "1.0.0",
+		Status:                "healthy",
+		Timestamp:             time.Now().UTC(),
+		LastDailyReport:       lastDailyReport,
+		LastHighSeverityCheck: lastHighSeverityCheck,
+		Running:               running,
+		Version:               "1.0.0",
 	}); err != nil {
 		log.Error().Err(err).Msg("Failed to encode health response")
 	}
@@ -111,45 +111,74 @@ func (h *Handler) ReadyHandler(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-// TriggerDailyHandler handles manual daily report triggers
-func (h *Handler) TriggerDailyHandler(w http.ResponseWriter, r *http.Request) {
+// CreateDailyReportRequest handles POST /v1/report-requests/daily
+func (h *Handler) CreateDailyReportRequest(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	if r.Method != http.MethodPost {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
 
-	if err := h.scheduler.TriggerDailyReport(); err != nil {
-		http.Error(w, fmt.Sprintf("Failed to trigger daily report: %v", err), http.StatusInternalServerError)
+	var req models.DailyReportRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "Invalid JSON body", http.StatusBadRequest)
 		return
 	}
 
-	w.WriteHeader(http.StatusAccepted)
-	if err := json.NewEncoder(w).Encode(models.TriggerResponse{
-		Message: "Daily report triggered successfully",
-	}); err != nil {
-		log.Error().Err(err).Msg("Failed to encode trigger response")
+	if req.ReportDate == "" {
+		http.Error(w, "report_date is required", http.StatusBadRequest)
+		return
+	}
+	if req.Timezone == "" {
+		http.Error(w, "timezone is required", http.StatusBadRequest)
+		return
+	}
+
+	resp, err := h.scheduler.CreateDailyReportRequest(r.Context(), req.ReportDate, req.Timezone)
+	if err != nil {
+		log.Error().Err(err).Msg("Failed to create daily report request")
+		http.Error(w, fmt.Sprintf("Failed to create daily report request: %v", err), http.StatusInternalServerError)
+		return
+	}
+
+	status := http.StatusAccepted
+	if resp.Duplicate {
+		status = http.StatusOK
+	}
+	w.WriteHeader(status)
+	if err := json.NewEncoder(w).Encode(resp); err != nil {
+		log.Error().Err(err).Msg("Failed to encode daily report request response")
 	}
 }
 
-// TriggerHighSeverityHandler handles manual high severity alert triggers
-func (h *Handler) TriggerHighSeverityHandler(w http.ResponseWriter, r *http.Request) {
+// CreateHighSeverityReportRequest handles POST /v1/report-requests/high-severity
+func (h *Handler) CreateHighSeverityReportRequest(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	if r.Method != http.MethodPost {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
 
-	if err := h.scheduler.TriggerHighSeverityAlert(); err != nil {
-		http.Error(w, fmt.Sprintf("Failed to trigger high severity alert: %v", err), http.StatusInternalServerError)
+	var req models.HighSeverityReportRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "Invalid JSON body", http.StatusBadRequest)
 		return
 	}
 
-	w.WriteHeader(http.StatusAccepted)
-	if err := json.NewEncoder(w).Encode(models.TriggerResponse{
-		Message: "High severity alert triggered successfully",
-	}); err != nil {
-		log.Error().Err(err).Msg("Failed to encode trigger response")
+	resp, err := h.scheduler.CreateHighSeverityReportRequest(r.Context(), req.IncidentIDs, req.Evaluate)
+	if err != nil {
+		log.Error().Err(err).Msg("Failed to create high severity report request")
+		http.Error(w, fmt.Sprintf("Failed to create high severity report request: %v", err), http.StatusInternalServerError)
+		return
+	}
+
+	status := http.StatusAccepted
+	if resp.Duplicate {
+		status = http.StatusOK
+	}
+	w.WriteHeader(status)
+	if err := json.NewEncoder(w).Encode(resp); err != nil {
+		log.Error().Err(err).Msg("Failed to encode high severity report request response")
 	}
 }
 

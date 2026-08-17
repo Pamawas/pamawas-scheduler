@@ -97,10 +97,12 @@ func main() {
 	r := http.NewServeMux()
 	r.HandleFunc("/healthz", h.HealthHandler)
 	r.HandleFunc("/ready", h.ReadyHandler)
-	r.HandleFunc("/trigger/daily", h.TriggerDailyHandler)
-	r.HandleFunc("/trigger/high-severity", h.TriggerHighSeverityHandler)
 	r.HandleFunc("/status", h.StatusHandler)
 	r.Handle("/metrics", h.MetricsHandler())
+
+	// v1 API endpoints
+	r.HandleFunc("/v1/report-requests/daily", h.CreateDailyReportRequest)
+	r.HandleFunc("/v1/report-requests/high-severity", h.CreateHighSeverityReportRequest)
 
 	// Wrap router with middleware
 	var handler http.Handler = r
