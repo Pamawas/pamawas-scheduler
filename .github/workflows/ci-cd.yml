@@ -37,7 +37,7 @@ jobs:
     - name: Run linter
       uses: golangci/golangci-lint-action@v7
       with:
-        version: v2.12.2
+        version: v2.15.0
         args: ./...
 
   build:
