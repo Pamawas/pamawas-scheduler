@@ -479,12 +479,12 @@ func (s *Scheduler) filterEligibleIncidents(ctx context.Context, incidentIDs []s
 		args[i+1] = id
 	}
 
-	// Build query safely - placeholders are safe (just $N parameters), args are parameterized
-	//nolint:gosec
-	query := fmt.Sprintf(`
+	// Build query using template replacement - placeholders are safe ($N params), args are parameterized
+	//nolint:gosec G201 -- placeholders are generated $N parameter markers, values passed via parameterized args
+	const queryTmpl = `
 		SELECT id
 		FROM incidents
-		WHERE id IN (%s)
+		WHERE id IN ({{IN_CLAUSE}})
 		AND status IN ('open', 'investigating')
 		AND (
 			(LOWER(severity) = 'critical' AND $1 IN ('critical')) OR
@@ -498,9 +498,11 @@ func (s *Scheduler) filterEligibleIncidents(ctx context.Context, incidentIDs []s
 			SELECT 1 FROM report_requests rr
 			WHERE rr.request_type = 'high_severity'
 			AND rr.status IN ('pending', 'generating', 'generated')
-			AND rr.idempotency_hash LIKE '%%%%' || incidents.id || '%%%%'
+			AND rr.idempotency_hash LIKE '%%' || incidents.id || '%%'
 		)
-	`, strings.Join(placeholders, ","))
+	`
+	inClause := strings.Join(placeholders, ",")
+	query := strings.Replace(queryTmpl, "{{IN_CLAUSE}}", inClause, 1)
 
 	rows, err := s.db.QueryContext(ctx, query, args...)
 	if err != nil {
