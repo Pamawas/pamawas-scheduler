@@ -20,14 +20,14 @@ import (
 
 func handlerMetrics() *metrics.Metrics {
 	return &metrics.Metrics{
-		DailyReportsTotal:        prometheus.NewCounter(prometheus.CounterOpts{Name: "handler_daily_total"}),
-		HighSeverityChecksTotal:  prometheus.NewCounter(prometheus.CounterOpts{Name: "handler_checks_total"}),
-		HighSeverityAlertsTotal:  prometheus.NewCounter(prometheus.CounterOpts{Name: "handler_alerts_total"}),
-		DBConnectionErrors:       prometheus.NewCounter(prometheus.CounterOpts{Name: "handler_db_errors_total"}),
-		LastDailyReport:          prometheus.NewGauge(prometheus.GaugeOpts{Name: "handler_last_daily"}),
-		LastHighSeverityCheck:    prometheus.NewGauge(prometheus.GaugeOpts{Name: "handler_last_check"}),
-		SchedulerRunning:         prometheus.NewGauge(prometheus.GaugeOpts{Name: "handler_running"}),
-		SchedulerUptime:          prometheus.NewGauge(prometheus.GaugeOpts{Name: "handler_uptime"}),
+		DailyReportsTotal:       prometheus.NewCounter(prometheus.CounterOpts{Name: "handler_daily_total"}),
+		HighSeverityChecksTotal: prometheus.NewCounter(prometheus.CounterOpts{Name: "handler_checks_total"}),
+		HighSeverityAlertsTotal: prometheus.NewCounter(prometheus.CounterOpts{Name: "handler_alerts_total"}),
+		DBConnectionErrors:      prometheus.NewCounter(prometheus.CounterOpts{Name: "handler_db_errors_total"}),
+		LastDailyReport:         prometheus.NewGauge(prometheus.GaugeOpts{Name: "handler_last_daily"}),
+		LastHighSeverityCheck:   prometheus.NewGauge(prometheus.GaugeOpts{Name: "handler_last_check"}),
+		SchedulerRunning:        prometheus.NewGauge(prometheus.GaugeOpts{Name: "handler_running"}),
+		SchedulerUptime:         prometheus.NewGauge(prometheus.GaugeOpts{Name: "handler_uptime"}),
 	}
 }
 

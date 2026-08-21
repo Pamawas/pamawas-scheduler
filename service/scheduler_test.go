@@ -18,14 +18,14 @@ import (
 
 func schedulerMetrics() *metrics.Metrics {
 	return &metrics.Metrics{
-		DailyReportsTotal:        prometheus.NewCounter(prometheus.CounterOpts{Name: "test_daily_total"}),
-		HighSeverityChecksTotal:  prometheus.NewCounter(prometheus.CounterOpts{Name: "test_checks_total"}),
-		HighSeverityAlertsTotal:  prometheus.NewCounter(prometheus.CounterOpts{Name: "test_alerts_total"}),
-		DBConnectionErrors:       prometheus.NewCounter(prometheus.CounterOpts{Name: "test_db_errors_total"}),
-		LastDailyReport:          prometheus.NewGauge(prometheus.GaugeOpts{Name: "test_last_daily"}),
-		LastHighSeverityCheck:    prometheus.NewGauge(prometheus.GaugeOpts{Name: "test_last_check"}),
-		SchedulerRunning:         prometheus.NewGauge(prometheus.GaugeOpts{Name: "test_running"}),
-		SchedulerUptime:          prometheus.NewGauge(prometheus.GaugeOpts{Name: "test_uptime"}),
+		DailyReportsTotal:       prometheus.NewCounter(prometheus.CounterOpts{Name: "test_daily_total"}),
+		HighSeverityChecksTotal: prometheus.NewCounter(prometheus.CounterOpts{Name: "test_checks_total"}),
+		HighSeverityAlertsTotal: prometheus.NewCounter(prometheus.CounterOpts{Name: "test_alerts_total"}),
+		DBConnectionErrors:      prometheus.NewCounter(prometheus.CounterOpts{Name: "test_db_errors_total"}),
+		LastDailyReport:         prometheus.NewGauge(prometheus.GaugeOpts{Name: "test_last_daily"}),
+		LastHighSeverityCheck:   prometheus.NewGauge(prometheus.GaugeOpts{Name: "test_last_check"}),
+		SchedulerRunning:        prometheus.NewGauge(prometheus.GaugeOpts{Name: "test_running"}),
+		SchedulerUptime:         prometheus.NewGauge(prometheus.GaugeOpts{Name: "test_uptime"}),
 	}
 }
 
@@ -67,10 +67,10 @@ func TestReporterClientTriggersRequests(t *testing.T) {
 	var bodies []map[string]interface{}
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		var body map[string]interface{}
-			if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
-				t.Errorf("decode error: %v", err)
-				return
-			}
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			t.Errorf("decode error: %v", err)
+			return
+		}
 		bodies = append(bodies, body)
 		if r.Method != http.MethodPost || r.Header.Get("Content-Type") != "application/json" {
 			t.Errorf("request=%s %s", r.Method, r.Header.Get("Content-Type"))
@@ -285,9 +285,9 @@ func TestTriggerDailyReportForDate(t *testing.T) {
 			t.Errorf("unexpected path: %s", r.URL.Path)
 		}
 		var payload ReportPayload
-			if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
-				t.Errorf("decode error: %v", err)
-			}
+		if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+			t.Errorf("decode error: %v", err)
+		}
 		if payload.ReportType != "daily" || payload.ContractVersion != 1 {
 			t.Errorf("unexpected payload: %+v", payload)
 		}
@@ -342,12 +342,12 @@ func TestCheckAndTrigger_DailyReport(t *testing.T) {
 	defer server.Close()
 
 	s, mock := newMockScheduler(t, SchedulerConfig{
-		ReporterURL:          server.URL,
-		DailyReportTime:      "07:00",
-		EnableDailyReport:    true,
+		ReporterURL:             server.URL,
+		DailyReportTime:         "07:00",
+		EnableDailyReport:       true,
 		EnableHighSeverityAlert: false,
-		DefaultTimezone:      "Asia/Jakarta",
-		CheckInterval:        time.Minute,
+		DefaultTimezone:         "Asia/Jakarta",
+		CheckInterval:           time.Minute,
 	})
 
 	// Mock time to be 07:00
