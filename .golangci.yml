@@ -35,6 +35,12 @@ linters:
           - goconst
           - unparam
           - lll
+          - errcheck
+          - govet
+          - ineffassign
+          - noctx
+          - unused
+          - staticcheck
 
 issues:
   max-issues-per-linter: 0
