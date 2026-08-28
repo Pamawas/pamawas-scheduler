@@ -36,7 +36,7 @@ func Load() Config {
 	v.SetDefault("port", "8080")
 	v.SetDefault("log_level", "info")
 	v.SetDefault("environment", "development")
-	v.SetDefault("reporter_url", "http://localhost:8081")
+	v.SetDefault("reporter_url", "http://pamawas-reporter:8080")
 	v.SetDefault("daily_report_time", "07:00")
 	v.SetDefault("high_severity_threshold", "high")
 	v.SetDefault("check_interval", "30s")

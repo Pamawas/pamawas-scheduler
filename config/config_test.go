@@ -33,7 +33,7 @@ func TestLoadDefaultsAndEnvironmentOverrides(t *testing.T) {
 	if cfg.DatabaseURL != "postgres://example/test" || cfg.Port != "9090" || cfg.CheckInterval != 2*time.Minute || cfg.EnableDailyReport {
 		t.Fatalf("unexpected config: %+v", cfg)
 	}
-	if cfg.ReporterURL != "http://localhost:8081" || cfg.DailyReportTime != "07:00" || !cfg.EnableHighSeverityAlert || cfg.Mode != "auto" {
+	if cfg.ReporterURL != "http://pamawas-reporter:8080" || cfg.DailyReportTime != "07:00" || !cfg.EnableHighSeverityAlert || cfg.Mode != "auto" {
 		t.Fatalf("defaults not applied: %+v", cfg)
 	}
 }
