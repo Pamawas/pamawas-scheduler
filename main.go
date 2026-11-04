@@ -26,6 +26,7 @@ var version = "dev"
 func main() {
 	cfg := config.Load()
 	initLogger(cfg)
+	printStartupBanner("Pamawas Scheduler", loadVersion(), cfg.Port)
 
 	// Initialize OpenTelemetry tracing
 	otelShutdown, err := otel.InitTracer(otel.Config{
