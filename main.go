@@ -95,14 +95,16 @@ func main() {
 
 	// Create router
 	r := http.NewServeMux()
+
+	// Health endpoints at root (for k8s probes)
 	r.HandleFunc("/healthz", h.HealthHandler)
 	r.HandleFunc("/ready", h.ReadyHandler)
-	r.HandleFunc("/status", h.StatusHandler)
-	r.Handle("/metrics", h.MetricsHandler())
 
-	// v1 API endpoints
-	r.HandleFunc("/v1/report-requests/daily", h.CreateDailyReportRequest)
-	r.HandleFunc("/v1/report-requests/high-severity", h.CreateHighSeverityReportRequest)
+	// V1 API endpoints under /api/v1
+	r.HandleFunc("/api/v1/status", h.StatusHandler)
+	r.Handle("/api/v1/metrics", h.MetricsHandler())
+	r.HandleFunc("/api/v1/report-requests/daily", h.CreateDailyReportRequest)
+	r.HandleFunc("/api/v1/report-requests/high-severity", h.CreateHighSeverityReportRequest)
 
 	// Wrap router with middleware
 	var handler http.Handler = r
