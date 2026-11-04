@@ -32,43 +32,43 @@ func Load() Config {
 	v.SetEnvPrefix("PAMAWAS_SCHEDULER")
 	// Don't use AutomaticEnv() - Kubernetes injects PAMAWAS_SCHEDULER_PORT=tcp://IP:PORT
 	// which would override our config. Explicitly bind only what we need.
-	if err := v.BindEnv("database_url", "DATABASE_URL"); err != nil {
+	if err := v.BindEnv("database_url", "DATABASE_URL", "PAMAWAS_SCHEDULER_DATABASE_URL"); err != nil {
 		panic(fmt.Sprintf("failed to bind DATABASE_URL env: %v", err))
 	}
-	if err := v.BindEnv("port", "PORT"); err != nil {
+	if err := v.BindEnv("port", "PORT", "PAMAWAS_SCHEDULER_PORT"); err != nil {
 		panic(fmt.Sprintf("failed to bind PORT env: %v", err))
 	}
-	if err := v.BindEnv("log_level", "LOG_LEVEL"); err != nil {
+	if err := v.BindEnv("log_level", "LOG_LEVEL", "PAMAWAS_SCHEDULER_LOG_LEVEL"); err != nil {
 		panic(fmt.Sprintf("failed to bind LOG_LEVEL env: %v", err))
 	}
-	if err := v.BindEnv("environment", "ENVIRONMENT"); err != nil {
+	if err := v.BindEnv("environment", "ENVIRONMENT", "PAMAWAS_SCHEDULER_ENVIRONMENT"); err != nil {
 		panic(fmt.Sprintf("failed to bind ENVIRONMENT env: %v", err))
 	}
-	if err := v.BindEnv("reporter_url", "REPORTER_URL"); err != nil {
+	if err := v.BindEnv("reporter_url", "REPORTER_URL", "PAMAWAS_SCHEDULER_REPORTER_URL"); err != nil {
 		panic(fmt.Sprintf("failed to bind REPORTER_URL env: %v", err))
 	}
-	if err := v.BindEnv("daily_report_time", "DAILY_REPORT_TIME"); err != nil {
+	if err := v.BindEnv("daily_report_time", "DAILY_REPORT_TIME", "PAMAWAS_SCHEDULER_DAILY_REPORT_TIME"); err != nil {
 		panic(fmt.Sprintf("failed to bind DAILY_REPORT_TIME env: %v", err))
 	}
-	if err := v.BindEnv("high_severity_threshold", "HIGH_SEVERITY_THRESHOLD"); err != nil {
+	if err := v.BindEnv("high_severity_threshold", "HIGH_SEVERITY_THRESHOLD", "PAMAWAS_SCHEDULER_HIGH_SEVERITY_THRESHOLD"); err != nil {
 		panic(fmt.Sprintf("failed to bind HIGH_SEVERITY_THRESHOLD env: %v", err))
 	}
-	if err := v.BindEnv("check_interval", "CHECK_INTERVAL"); err != nil {
+	if err := v.BindEnv("check_interval", "CHECK_INTERVAL", "PAMAWAS_SCHEDULER_CHECK_INTERVAL"); err != nil {
 		panic(fmt.Sprintf("failed to bind CHECK_INTERVAL env: %v", err))
 	}
-	if err := v.BindEnv("enable_daily_report", "ENABLE_DAILY_REPORT"); err != nil {
+	if err := v.BindEnv("enable_daily_report", "ENABLE_DAILY_REPORT", "PAMAWAS_SCHEDULER_ENABLE_DAILY_REPORT"); err != nil {
 		panic(fmt.Sprintf("failed to bind ENABLE_DAILY_REPORT env: %v", err))
 	}
-	if err := v.BindEnv("enable_high_severity_alert", "ENABLE_HIGH_SEVERITY_ALERT"); err != nil {
+	if err := v.BindEnv("enable_high_severity_alert", "ENABLE_HIGH_SEVERITY_ALERT", "PAMAWAS_SCHEDULER_ENABLE_HIGH_SEVERITY_ALERT"); err != nil {
 		panic(fmt.Sprintf("failed to bind ENABLE_HIGH_SEVERITY_ALERT env: %v", err))
 	}
-	if err := v.BindEnv("mode", "SCHEDULER_MODE"); err != nil {
+	if err := v.BindEnv("mode", "SCHEDULER_MODE", "PAMAWAS_SCHEDULER_MODE"); err != nil {
 		panic(fmt.Sprintf("failed to bind SCHEDULER_MODE env: %v", err))
 	}
-	if err := v.BindEnv("default_timezone", "DEFAULT_TIMEZONE"); err != nil {
+	if err := v.BindEnv("default_timezone", "DEFAULT_TIMEZONE", "PAMAWAS_SCHEDULER_DEFAULT_TIMEZONE"); err != nil {
 		panic(fmt.Sprintf("failed to bind DEFAULT_TIMEZONE env: %v", err))
 	}
-	if err := v.BindEnv("otel_exporter_otlp_endpoint", "OTEL_EXPORTER_OTLP_ENDPOINT"); err != nil {
+	if err := v.BindEnv("otel_exporter_otlp_endpoint", "OTEL_EXPORTER_OTLP_ENDPOINT", "PAMAWAS_SCHEDULER_OTEL_EXPORTER_OTLP_ENDPOINT"); err != nil {
 		panic(fmt.Sprintf("failed to bind OTEL_EXPORTER_OTLP_ENDPOINT env: %v", err))
 	}
 
