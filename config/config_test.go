@@ -29,6 +29,7 @@ func TestLoadDefaultsAndEnvironmentOverrides(t *testing.T) {
 	t.Setenv("PAMAWAS_SCHEDULER_PORT", "9090")
 	t.Setenv("PAMAWAS_SCHEDULER_CHECK_INTERVAL", "2m")
 	t.Setenv("PAMAWAS_SCHEDULER_ENABLE_DAILY_REPORT", "false")
+	os.Unsetenv("PORT") // avoid Kubernetes PORT env leaking into viper
 	cfg := Load()
 	if cfg.DatabaseURL != "postgres://example/test" || cfg.Port != "9090" || cfg.CheckInterval != 2*time.Minute || cfg.EnableDailyReport {
 		t.Fatalf("unexpected config: %+v", cfg)
