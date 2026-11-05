@@ -393,11 +393,8 @@ func (s *Scheduler) checkHighSeverityIncidents() error {
 			)
 		`
 
-	// Only check incidents from the last hour to avoid repeated alerts
-	since := time.Now().Add(-1 * time.Hour)
-
 	var count int
-	err := s.db.QueryRowContext(s.ctx, query, threshold, since).Scan(&count)
+	err := s.db.QueryRowContext(s.ctx, query, threshold).Scan(&count)
 	if err != nil {
 		return err
 	}

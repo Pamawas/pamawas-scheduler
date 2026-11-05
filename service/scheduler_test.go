@@ -106,7 +106,7 @@ func TestReporterClientReturnsHTTPError(t *testing.T) {
 
 func TestCheckHighSeverityIncidentsNoMatches(t *testing.T) {
 	s, mock := newMockScheduler(t, SchedulerConfig{HighSeverityThreshold: "HIGH"})
-	mock.ExpectQuery("SELECT COUNT").WithArgs("high", sqlmock.AnyArg()).WillReturnRows(sqlmock.NewRows([]string{"count"}).AddRow(0))
+	mock.ExpectQuery("SELECT COUNT").WithArgs("high").WillReturnRows(sqlmock.NewRows([]string{"count"}).AddRow(0))
 	if err := s.checkHighSeverityIncidents(); err != nil {
 		t.Fatal(err)
 	}
@@ -120,7 +120,7 @@ func TestCheckHighSeverityIncidentsTriggersAlert(t *testing.T) {
 
 	// Mock the initial COUNT query
 	mock.ExpectQuery("SELECT COUNT").
-		WithArgs("critical", sqlmock.AnyArg()).
+		WithArgs("critical").
 		WillReturnRows(sqlmock.NewRows([]string{"count"}).AddRow(2))
 
 	// Mock getEligibleHighSeverityIncidents query (called from CreateHighSeverityReportRequest)
@@ -155,7 +155,7 @@ func TestCheckAndTriggerSkipsWhenRunning(t *testing.T) {
 
 func TestCheckAndTriggerRecordsHighSeverityCheck(t *testing.T) {
 	s, mock := newMockScheduler(t, SchedulerConfig{EnableHighSeverityAlert: true, HighSeverityThreshold: "high"})
-	mock.ExpectQuery("SELECT COUNT").WithArgs("high", sqlmock.AnyArg()).WillReturnRows(sqlmock.NewRows([]string{"count"}).AddRow(0))
+	mock.ExpectQuery("SELECT COUNT").WithArgs("high").WillReturnRows(sqlmock.NewRows([]string{"count"}).AddRow(0))
 	if err := s.checkAndTrigger(); err != nil {
 		t.Fatal(err)
 	}
