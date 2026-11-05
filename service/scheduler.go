@@ -374,24 +374,24 @@ func (s *Scheduler) checkHighSeverityIncidents() error {
 	threshold := strings.ToLower(s.config.HighSeverityThreshold)
 
 	query := `
-		SELECT COUNT(*)
-		FROM incidents
-		WHERE status IN ('open', 'investigating')
-		AND (
-			(LOWER(severity) = 'critical' AND $1 IN ('critical')) OR
-			(LOWER(severity) = 'high' AND $1 IN ('high', 'critical')) OR
-			(LOWER(severity) = 'warning' AND $1 IN ('warning', 'high', 'critical')) OR
-			(LOWER(severity) = 'info' AND $1 IN ('info', 'warning', 'high', 'critical')) OR
-			(LOWER(severity) = 'debug' AND $1 IN ('info', 'warning', 'high', 'critical', 'debug'))
-		)
-		AND NOT suppressed
-		AND NOT EXISTS (
-			SELECT 1 FROM report_requests rr
-			WHERE rr.request_type = 'high_severity'
-			AND rr.status IN ('pending', 'generating', 'generated')
-			AND rr.idempotency_hash LIKE '%%' || incidents.id || '%%'
-		)
-	`
+			SELECT COUNT(*)
+			FROM incidents
+			WHERE status IN ('open', 'investigating')
+			AND (
+				(LOWER(severity) = 'critical' AND $1 IN ('critical')) OR
+				(LOWER(severity) = 'high' AND $1 IN ('high', 'critical')) OR
+				(LOWER(severity) = 'warning' AND $1 IN ('warning', 'high', 'critical')) OR
+				(LOWER(severity) = 'info' AND $1 IN ('info', 'warning', 'high', 'critical')) OR
+				(LOWER(severity) = 'debug' AND $1 IN ('info', 'warning', 'high', 'critical', 'debug'))
+			)
+			AND status != 'suppressed'
+			AND NOT EXISTS (
+				SELECT 1 FROM report_requests rr
+				WHERE rr.request_type = 'high_severity'
+				AND rr.status IN ('pending', 'generating', 'generated')
+				AND rr.idempotency_hash LIKE '%%' || incidents.id || '%%'
+			)
+		`
 
 	// Only check incidents from the last hour to avoid repeated alerts
 	since := time.Now().Add(-1 * time.Hour)
@@ -422,26 +422,26 @@ func (s *Scheduler) getEligibleHighSeverityIncidents(ctx context.Context) ([]str
 	threshold := strings.ToLower(s.config.HighSeverityThreshold)
 
 	query := `
-		SELECT id
-		FROM incidents
-		WHERE status IN ('open', 'investigating')
-		AND (
-			(LOWER(severity) = 'critical' AND $1 IN ('critical')) OR
-			(LOWER(severity) = 'high' AND $1 IN ('high', 'critical')) OR
-			(LOWER(severity) = 'warning' AND $1 IN ('warning', 'high', 'critical')) OR
-			(LOWER(severity) = 'info' AND $1 IN ('info', 'warning', 'high', 'critical')) OR
-			(LOWER(severity) = 'debug' AND $1 IN ('info', 'warning', 'high', 'critical', 'debug'))
-		)
-		AND NOT suppressed
-		AND NOT EXISTS (
-			SELECT 1 FROM report_requests rr
-			WHERE rr.request_type = 'high_severity'
-			AND rr.status IN ('pending', 'generating', 'generated')
-			AND rr.idempotency_hash LIKE '%%' || incidents.id || '%%'
-		)
-	`
+			SELECT id
+			FROM incidents
+			WHERE status IN ('open', 'investigating')
+			AND (
+				(LOWER(severity) = 'critical' AND $1 IN ('critical')) OR
+				(LOWER(severity) = 'high' AND $1 IN ('high', 'critical')) OR
+				(LOWER(severity) = 'warning' AND $1 IN ('warning', 'high', 'critical')) OR
+				(LOWER(severity) = 'info' AND $1 IN ('info', 'warning', 'high', 'critical')) OR
+				(LOWER(severity) = 'debug' AND $1 IN ('info', 'warning', 'high', 'critical', 'debug'))
+			)
+			AND status != 'suppressed'
+			AND NOT EXISTS (
+				SELECT 1 FROM report_requests rr
+				WHERE rr.request_type = 'high_severity'
+				AND rr.status IN ('pending', 'generating', 'generated')
+				AND rr.idempotency_hash LIKE '%%' || incidents.id || '%%'
+			)
+		`
 
-	rows, err := s.db.QueryContext(ctx, query, threshold)
+		rows, err := s.db.QueryContext(ctx, query, threshold)
 	if err != nil {
 		return nil, err
 	}
@@ -490,17 +490,17 @@ func (s *Scheduler) filterEligibleIncidents(ctx context.Context, incidentIDs []s
 			(LOWER(severity) = 'critical' AND $1 IN ('critical')) OR
 			(LOWER(severity) = 'high' AND $1 IN ('high', 'critical')) OR
 			(LOWER(severity) = 'warning' AND $1 IN ('warning', 'high', 'critical')) OR
-			(LOWER(severity) = 'info' AND $1 IN ('info', 'warning', 'high', 'critical')) OR
-			(LOWER(severity) = 'debug' AND $1 IN ('info', 'warning', 'high', 'critical', 'debug'))
-		)
-		AND NOT suppressed
-		AND NOT EXISTS (
-			SELECT 1 FROM report_requests rr
-			WHERE rr.request_type = 'high_severity'
-			AND rr.status IN ('pending', 'generating', 'generated')
-			AND rr.idempotency_hash LIKE '%%' || incidents.id || '%%'
-		)
-	`
+					(LOWER(severity) = 'info' AND $1 IN ('info', 'warning', 'high', 'critical')) OR
+					(LOWER(severity) = 'debug' AND $1 IN ('info', 'warning', 'high', 'critical', 'debug'))
+				)
+				AND status != 'suppressed'
+				AND NOT EXISTS (
+					SELECT 1 FROM report_requests rr
+					WHERE rr.request_type = 'high_severity'
+					AND rr.status IN ('pending', 'generating', 'generated')
+					AND rr.idempotency_hash LIKE '%%' || incidents.id || '%%'
+				)
+				`
 	inClause := strings.Join(placeholders, ",")
 	query := strings.Replace(queryTmpl, "{{IN_CLAUSE}}", inClause, 1)
 
