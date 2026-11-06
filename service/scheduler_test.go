@@ -246,7 +246,7 @@ func TestCreateHighSeverityReportRequest_WithExplicitIncidents(t *testing.T) {
 	s, mock := newMockScheduler(t, SchedulerConfig{ReporterURL: "http://reporter", HighSeverityThreshold: "high"})
 
 	// Filter eligible incidents
-	mock.ExpectQuery("SELECT id FROM incidents WHERE id IN").
+	mock.ExpectQuery("SELECT id FROM incidents WHERE id = ANY").
 		WillReturnRows(sqlmock.NewRows([]string{"id"}).AddRow("inc_01TEST123456789012345678901234"))
 
 	// Insert report request for the incident
@@ -265,7 +265,7 @@ func TestCreateHighSeverityReportRequest_DuplicatePerIncident(t *testing.T) {
 	s, mock := newMockScheduler(t, SchedulerConfig{ReporterURL: "http://reporter", HighSeverityThreshold: "high"})
 
 	// Filter eligible incidents
-	mock.ExpectQuery("SELECT id FROM incidents WHERE id IN").
+	mock.ExpectQuery("SELECT id FROM incidents WHERE id = ANY").
 		WillReturnRows(sqlmock.NewRows([]string{"id"}).AddRow("inc_01TEST123456789012345678901234"))
 
 	// Insert report request - duplicate
@@ -323,7 +323,7 @@ func TestFilterEligibleIncidents(t *testing.T) {
 	s, mock := newMockScheduler(t, SchedulerConfig{HighSeverityThreshold: "high"})
 
 	// Should only return those that match the query
-	mock.ExpectQuery("SELECT id FROM incidents WHERE id IN").
+	mock.ExpectQuery("SELECT id FROM incidents WHERE id = ANY").
 		WillReturnRows(sqlmock.NewRows([]string{"id"}).AddRow("inc_01TEST111111111111111111111111"))
 
 	eligible, err := s.filterEligibleIncidents(context.Background(), []string{

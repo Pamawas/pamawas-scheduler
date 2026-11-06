@@ -192,7 +192,7 @@ func TestCreateHighSeverityReportRequest(t *testing.T) {
 	h, mock := newTestHandler(t, config.Config{ReporterURL: "http://reporter", HighSeverityThreshold: "high"})
 
 	// Filter eligible
-	mock.ExpectQuery("SELECT id FROM incidents WHERE id IN").
+	mock.ExpectQuery("SELECT id FROM incidents WHERE id = ANY").
 		WillReturnRows(sqlmock.NewRows([]string{"id"}).AddRow("inc_01TEST123456789012345678901234"))
 
 	// Insert

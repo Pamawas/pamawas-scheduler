@@ -38,7 +38,7 @@ func TestMetricsRoutes(t *testing.T) {
 func TestNewScheduler(t *testing.T) {
 	db, err := sql.Open("postgres", "postgres://localhost/test?sslmode=disable")
 	if err != nil {
-		t.Skipf("Skipping test: cannot open database: %v", err)
+		t.Fatalf("cannot open database: %v", err)
 	}
 	defer func() {
 		if closeErr := db.Close(); closeErr != nil {
