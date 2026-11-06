@@ -281,7 +281,7 @@ func TestCreateHighSeverityReportRequest_DuplicatePerIncident(t *testing.T) {
 
 func TestTriggerDailyReportForDate(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/v1/reports" {
+		if r.URL.Path != "/api/v1/reports" {
 			t.Errorf("unexpected path: %s", r.URL.Path)
 		}
 		var payload ReportPayload

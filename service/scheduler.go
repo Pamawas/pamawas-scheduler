@@ -60,7 +60,7 @@ func (c *ReporterClient) SendReportRequest(payload ReportPayload) error {
 		return fmt.Errorf("failed to marshal payload: %w", err)
 	}
 
-	req, err := http.NewRequestWithContext(c.ctx, http.MethodPost, c.baseURL+"/v1/reports", strings.NewReader(string(body)))
+	req, err := http.NewRequestWithContext(c.ctx, http.MethodPost, c.baseURL+"/api/v1/reports", strings.NewReader(string(body)))
 	if err != nil {
 		return err
 	}
