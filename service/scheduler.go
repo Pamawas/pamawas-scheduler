@@ -385,7 +385,7 @@ func (s *Scheduler) checkHighSeverityIncidents() error {
 			(LOWER(severity) = 'info' AND $1 IN ('info', 'warning', 'high', 'critical')) OR
 			(LOWER(severity) = 'debug' AND $1 IN ('info', 'warning', 'high', 'critical', 'debug'))
 		)
-		AND NOT suppressed
+		AND status <> 'suppressed'
 		AND NOT EXISTS (
 			SELECT 1 FROM report_requests rr
 			WHERE rr.request_type = 'high_severity'
@@ -430,7 +430,7 @@ func (s *Scheduler) getEligibleHighSeverityIncidents(ctx context.Context) ([]str
 			(LOWER(severity) = 'info' AND $1 IN ('info', 'warning', 'high', 'critical')) OR
 			(LOWER(severity) = 'debug' AND $1 IN ('info', 'warning', 'high', 'critical', 'debug'))
 		)
-		AND NOT suppressed
+		AND status <> 'suppressed'
 		AND NOT EXISTS (
 			SELECT 1 FROM report_requests rr
 			WHERE rr.request_type = 'high_severity'
@@ -481,7 +481,7 @@ func (s *Scheduler) filterEligibleIncidents(ctx context.Context, incidentIDs []s
 			(LOWER(severity) = 'info' AND $1 IN ('info', 'warning', 'high', 'critical')) OR
 			(LOWER(severity) = 'debug' AND $1 IN ('info', 'warning', 'high', 'critical', 'debug'))
 		)
-		AND NOT suppressed
+		AND status <> 'suppressed'
 		AND NOT EXISTS (
 			SELECT 1 FROM report_requests rr
 			WHERE rr.request_type = 'high_severity'
