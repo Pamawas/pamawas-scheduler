@@ -6,7 +6,6 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
-	"strings"
 	"testing"
 	"time"
 
@@ -107,7 +106,9 @@ func TestReporterClientReturnsHTTPError(t *testing.T) {
 
 func TestCheckHighSeverityIncidentsNoMatches(t *testing.T) {
 	s, mock := newMockScheduler(t, SchedulerConfig{HighSeverityThreshold: "HIGH"})
-	mock.ExpectQuery("SELECT COUNT").WillReturnRows(sqlmock.NewRows([]string{"count"}).AddRow(0))
+	mock.ExpectQuery("SELECT COUNT").
+		WithArgs(4).
+		WillReturnRows(sqlmock.NewRows([]string{"count"}).AddRow(0))
 	if err := s.checkHighSeverityIncidents(); err != nil {
 		t.Fatal(err)
 	}
@@ -115,52 +116,21 @@ func TestCheckHighSeverityIncidentsNoMatches(t *testing.T) {
 
 func TestSeverityRank(t *testing.T) {
 	cases := map[string]int{
-		"":          0,
-		"unknown":   0,
-		"debug":     1,
-		"info":      2,
-		"warning":   3,
-		"high":      4,
-		"critical":  5,
-		"WARNING":   3, // case-insensitive
-		"Critical":  5,
-		"DEBUG":     1,
+		"":         0,
+		"unknown":  0,
+		"debug":    1,
+		"info":     2,
+		"warning":  3,
+		"high":     4,
+		"critical": 5,
+		"WARNING":  3, // case-insensitive
+		"Critical": 5,
+		"DEBUG":    1,
 	}
 	for in, want := range cases {
 		if got := severityRank(in); got != want {
 			t.Errorf("severityRank(%q) = %d, want %d", in, got, want)
 		}
-	}
-}
-
-func TestSeverityAtLeastRankSQLThresholdBehavior(t *testing.T) {
-	// A warning incident must NOT match when the threshold is 'high'. This
-	// guards Bug #2 where the old IN-clause logic wrongly included warning
-	// incidents at the 'high' threshold. We verify the generated SQL embeds
-	// the correct threshold rank so the severity comparison is >= the rank.
-	cases := []struct {
-		threshold       string
-		thresholdRank   int
-		wantContains    string
-	}{
-		{"critical", 5, "END) >= 5"},
-		{"high", 4, "END) >= 4"},
-		{"warning", 3, "END) >= 3"},
-		{"info", 2, "END) >= 2"},
-		{"HIGH", 4, "END) >= 4"}, // case-insensitive threshold
-	}
-	for _, tc := range cases {
-		got := severityAtLeastRankSQL(severityRank(tc.threshold))
-		if !strings.Contains(got, tc.wantContains) {
-			t.Errorf("severityAtLeastRankSQL(severityRank(%q)) = %q, want it to contain %q", tc.threshold, got, tc.wantContains)
-		}
-	}
-
-	// With threshold 'high' (rank 4), rank 3 (warning) is strictly below the
-	// threshold and must never satisfy the condition.
-	highCond := severityAtLeastRankSQL(severityRank("high"))
-	if strings.Contains(highCond, ">= 3") {
-		t.Errorf("high threshold condition should use >= 4, got: %q", highCond)
 	}
 }
 
@@ -170,12 +140,14 @@ func TestCheckHighSeverityIncidentsTriggersAlert(t *testing.T) {
 	defer server.Close()
 	s, mock := newMockScheduler(t, SchedulerConfig{ReporterURL: server.URL, HighSeverityThreshold: "critical"})
 
-	// Mock the initial COUNT query (threshold is inlined into the SQL, no args)
+	// Mock the initial COUNT query with the critical severity rank.
 	mock.ExpectQuery("SELECT COUNT").
+		WithArgs(5).
 		WillReturnRows(sqlmock.NewRows([]string{"count"}).AddRow(2))
 
 	// Mock getEligibleHighSeverityIncidents query (called from CreateHighSeverityReportRequest)
 	mock.ExpectQuery("SELECT id FROM incidents").
+		WithArgs(5).
 		WillReturnRows(sqlmock.NewRows([]string{"id"}).AddRow("inc_01TEST111111111111111111111111").AddRow("inc_01TEST222222222222222222222222"))
 
 	// Mock insert for first incident
@@ -206,7 +178,9 @@ func TestCheckAndTriggerSkipsWhenRunning(t *testing.T) {
 
 func TestCheckAndTriggerRecordsHighSeverityCheck(t *testing.T) {
 	s, mock := newMockScheduler(t, SchedulerConfig{EnableHighSeverityAlert: true, HighSeverityThreshold: "high"})
-	mock.ExpectQuery("SELECT COUNT").WillReturnRows(sqlmock.NewRows([]string{"count"}).AddRow(0))
+	mock.ExpectQuery("SELECT COUNT").
+		WithArgs(4).
+		WillReturnRows(sqlmock.NewRows([]string{"count"}).AddRow(0))
 	if err := s.checkAndTrigger(); err != nil {
 		t.Fatal(err)
 	}
@@ -284,7 +258,9 @@ func TestCreateDailyReportRequest_InvalidDate(t *testing.T) {
 
 func TestCreateHighSeverityReportRequest_NoEligible(t *testing.T) {
 	s, mock := newMockScheduler(t, SchedulerConfig{HighSeverityThreshold: "high"})
-	mock.ExpectQuery("SELECT id FROM incidents").WillReturnRows(sqlmock.NewRows([]string{"id"}))
+	mock.ExpectQuery("SELECT id FROM incidents").
+		WithArgs(4).
+		WillReturnRows(sqlmock.NewRows([]string{"id"}))
 
 	resp, err := s.CreateHighSeverityReportRequest(context.Background(), []string{}, true)
 	require.NoError(t, err)
@@ -298,6 +274,7 @@ func TestCreateHighSeverityReportRequest_WithExplicitIncidents(t *testing.T) {
 
 	// Filter eligible incidents
 	mock.ExpectQuery("SELECT id FROM incidents WHERE id = ANY").
+		WithArgs(sqlmock.AnyArg(), 4).
 		WillReturnRows(sqlmock.NewRows([]string{"id"}).AddRow("inc_01TEST123456789012345678901234"))
 
 	// Insert report request for the incident
@@ -317,6 +294,7 @@ func TestCreateHighSeverityReportRequest_DuplicatePerIncident(t *testing.T) {
 
 	// Filter eligible incidents
 	mock.ExpectQuery("SELECT id FROM incidents WHERE id = ANY").
+		WithArgs(sqlmock.AnyArg(), 4).
 		WillReturnRows(sqlmock.NewRows([]string{"id"}).AddRow("inc_01TEST123456789012345678901234"))
 
 	// Insert report request - duplicate
@@ -360,6 +338,7 @@ func TestTriggerDailyReportForDate(t *testing.T) {
 func TestGetEligibleHighSeverityIncidents(t *testing.T) {
 	s, mock := newMockScheduler(t, SchedulerConfig{HighSeverityThreshold: "high"})
 	mock.ExpectQuery("SELECT id FROM incidents").
+		WithArgs(4).
 		WillReturnRows(sqlmock.NewRows([]string{"id"}).
 			AddRow("inc_01TEST111111111111111111111111").
 			AddRow("inc_01TEST222222222222222222222222"))
@@ -375,6 +354,7 @@ func TestFilterEligibleIncidents(t *testing.T) {
 
 	// Should only return those that match the query
 	mock.ExpectQuery("SELECT id FROM incidents WHERE id = ANY").
+		WithArgs(sqlmock.AnyArg(), 4).
 		WillReturnRows(sqlmock.NewRows([]string{"id"}).AddRow("inc_01TEST111111111111111111111111"))
 
 	eligible, err := s.filterEligibleIncidents(context.Background(), []string{

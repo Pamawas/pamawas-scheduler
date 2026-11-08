@@ -397,41 +397,33 @@ func severityRank(severity string) int {
 	}
 }
 
-// severityAtLeastRankSQL returns a SQL expression that evaluates to true when
-// the incident's severity is at least as severe as the given threshold rank.
-func severityAtLeastRankSQL(thresholdRank int) string {
-	return fmt.Sprintf(`
-		(CASE LOWER(severity)
+// checkHighSeverityIncidents checks for high severity incidents that need immediate attention
+func (s *Scheduler) checkHighSeverityIncidents() error {
+	thresholdRank := severityRank(s.config.HighSeverityThreshold)
+
+	query := `
+		SELECT COUNT(*)
+		FROM incidents
+		WHERE status IN ('open', 'investigating')
+		AND (CASE LOWER(severity)
 			WHEN 'debug' THEN 1
 			WHEN 'info' THEN 2
 			WHEN 'warning' THEN 3
 			WHEN 'high' THEN 4
 			WHEN 'critical' THEN 5
 			ELSE 0
-		END) >= %d`, thresholdRank)
-}
-
-// checkHighSeverityIncidents checks for high severity incidents that need immediate attention
-func (s *Scheduler) checkHighSeverityIncidents() error {
-	thresholdRank := severityRank(s.config.HighSeverityThreshold)
-	severityCond := severityAtLeastRankSQL(thresholdRank)
-
-	query := fmt.Sprintf(`
-		SELECT COUNT(*)
-		FROM incidents
-		WHERE status IN ('open', 'investigating')
-		AND %s
+		END) >= $1
 		AND status <> 'suppressed'
 		AND NOT EXISTS (
 			SELECT 1 FROM report_requests rr
 			WHERE rr.request_type = 'high_severity'
 			AND rr.status IN ('pending', 'generating', 'generated')
-			AND rr.idempotency_hash LIKE '%%' || incidents.id || '%%'
+			AND rr.idempotency_hash LIKE '%' || incidents.id || '%'
 		)
-	`, severityCond)
+	`
 
 	var count int
-	err := s.db.QueryRowContext(s.ctx, query).Scan(&count)
+	err := s.db.QueryRowContext(s.ctx, query, thresholdRank).Scan(&count)
 	if err != nil {
 		return err
 	}
@@ -454,23 +446,29 @@ func (s *Scheduler) checkHighSeverityIncidents() error {
 // getEligibleHighSeverityIncidents returns incident IDs that are eligible for high-severity reports
 func (s *Scheduler) getEligibleHighSeverityIncidents(ctx context.Context) ([]string, error) {
 	thresholdRank := severityRank(s.config.HighSeverityThreshold)
-	severityCond := severityAtLeastRankSQL(thresholdRank)
 
-	query := fmt.Sprintf(`
+	query := `
 		SELECT id
 		FROM incidents
 		WHERE status IN ('open', 'investigating')
-		AND %s
+		AND (CASE LOWER(severity)
+			WHEN 'debug' THEN 1
+			WHEN 'info' THEN 2
+			WHEN 'warning' THEN 3
+			WHEN 'high' THEN 4
+			WHEN 'critical' THEN 5
+			ELSE 0
+		END) >= $1
 		AND status <> 'suppressed'
 		AND NOT EXISTS (
 			SELECT 1 FROM report_requests rr
 			WHERE rr.request_type = 'high_severity'
 			AND rr.status IN ('pending', 'generating', 'generated')
-			AND rr.idempotency_hash LIKE '%%' || incidents.id || '%%'
+			AND rr.idempotency_hash LIKE '%' || incidents.id || '%'
 		)
-	`, severityCond)
+	`
 
-	rows, err := s.db.QueryContext(ctx, query)
+	rows, err := s.db.QueryContext(ctx, query, thresholdRank)
 	if err != nil {
 		return nil, err
 	}
@@ -499,24 +497,30 @@ func (s *Scheduler) filterEligibleIncidents(ctx context.Context, incidentIDs []s
 	}
 
 	thresholdRank := severityRank(s.config.HighSeverityThreshold)
-	severityCond := severityAtLeastRankSQL(thresholdRank)
 
-	query := fmt.Sprintf(`
+	query := `
 		SELECT id
 		FROM incidents
 		WHERE id = ANY($1)
 		AND status IN ('open', 'investigating')
-		AND %s
+		AND (CASE LOWER(severity)
+			WHEN 'debug' THEN 1
+			WHEN 'info' THEN 2
+			WHEN 'warning' THEN 3
+			WHEN 'high' THEN 4
+			WHEN 'critical' THEN 5
+			ELSE 0
+		END) >= $2
 		AND status <> 'suppressed'
 		AND NOT EXISTS (
 			SELECT 1 FROM report_requests rr
 			WHERE rr.request_type = 'high_severity'
 			AND rr.status IN ('pending', 'generating', 'generated')
-			AND rr.idempotency_hash LIKE '%%' || incidents.id || '%%'
+			AND rr.idempotency_hash LIKE '%' || incidents.id || '%'
 		)
-	`, severityCond)
+	`
 
-	rows, err := s.db.QueryContext(ctx, query, pq.Array(incidentIDs))
+	rows, err := s.db.QueryContext(ctx, query, pq.Array(incidentIDs), thresholdRank)
 	if err != nil {
 		return nil, err
 	}
