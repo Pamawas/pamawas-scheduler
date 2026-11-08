@@ -335,6 +335,35 @@ func TestFilterEligibleIncidents(t *testing.T) {
 	require.Equal(t, "inc_01TEST111111111111111111111111", eligible[0])
 }
 
+func TestParseDailyReportTime(t *testing.T) {
+	tests := []struct {
+		name      string
+		timeStr   string
+		wantHour  int
+		wantMin   int
+		wantError bool
+	}{
+		{"valid time 07:00", "07:00", 7, 0, false},
+		{"valid time 00:00", "00:00", 0, 0, false},
+		{"valid time 23:59", "23:59", 23, 59, false},
+		{"invalid format missing minutes", "07", 0, 0, true},
+		{"empty string", "", 0, 0, true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			gotHour, gotMin, err := parseDailyReportTime(tt.timeStr)
+			if tt.wantError {
+				require.Error(t, err)
+			} else {
+				require.NoError(t, err)
+				require.Equal(t, tt.wantHour, gotHour)
+				require.Equal(t, tt.wantMin, gotMin)
+			}
+		})
+	}
+}
+
 func TestCheckAndTrigger_DailyReport(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusAccepted)

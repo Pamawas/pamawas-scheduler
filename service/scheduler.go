@@ -159,11 +159,18 @@ func (s *Scheduler) checkAndTrigger() error {
 
 	// Check for daily report
 	if s.config.EnableDailyReport {
-		currentTime := now.Format("15:04") // HH:MM
-		if currentTime == s.config.DailyReportTime {
+		// Parse the configured time and check if we're within a window
+		targetHour, targetMin, err := parseDailyReportTime(s.config.DailyReportTime)
+		if err != nil {
+			log.Error().Err(err).Str("daily_report_time", s.config.DailyReportTime).Msg("Failed to parse daily_report_time")
+		} else {
+			currentHour := now.Hour()
+			currentMin := now.Minute()
+			// Trigger if we're within the configured hour/minute (check happens every check_interval)
+			shouldTrigger := currentHour == targetHour && currentMin == targetMin
 			// Check if we already sent today's report
 			today := now.Format("2006-01-02")
-			if s.lastDailyReport.Format("2006-01-02") != today {
+			if shouldTrigger && s.lastDailyReport.Format("2006-01-02") != today {
 				log.Info().Str("time", s.config.DailyReportTime).Msg("Time for daily report")
 				if err := s.triggerDailyReportForDate(now); err != nil {
 					log.Error().Err(err).Msg("Failed to trigger daily report")
@@ -546,4 +553,16 @@ func (s *Scheduler) Running() bool {
 // StartTime returns the start time
 func (s *Scheduler) StartTime() time.Time {
 	return s.startTime
+}
+
+// parseDailyReportTime parses a time string in "HH:MM" format and returns hour and minute.
+func parseDailyReportTime(timeStr string) (hour, minute int, err error) {
+	n, err := fmt.Sscanf(timeStr, "%d:%d", &hour, &minute)
+	if err != nil {
+		return 0, 0, fmt.Errorf("failed to parse time %q: %w", timeStr, err)
+	}
+	if n != 2 {
+		return 0, 0, fmt.Errorf("invalid time format %q, expected HH:MM", timeStr)
+	}
+	return hour, minute, nil
 }
