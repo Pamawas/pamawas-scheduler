@@ -421,3 +421,33 @@ func TestCheckAndTrigger_DailyReport(t *testing.T) {
 	err := s.triggerDailyReportForDate(time.Date(2026, 8, 16, 7, 0, 0, 0, time.UTC))
 	require.NoError(t, err)
 }
+
+func TestShouldFireDaily(t *testing.T) {
+	const (
+		tHour = 7
+		tMin  = 0
+	)
+
+	tests := []struct {
+		name string
+		h, m int
+		want bool
+	}{
+		{"before target", 6, 59, false},
+		{"exact target minute", 7, 0, true},
+		{"after target minute same hour", 7, 30, true},
+		{"same hour late minute", 7, 59, true},
+		{"catch-up: after target hour", 17, 23, true}, // pod restarted after 07:00
+		{"catch-up: next hour", 8, 0, true},
+		{"midnight boundary before target", 0, 0, false},
+		{"late hour late minute", 23, 59, true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := shouldFireDaily(tt.h, tt.m, tHour, tMin); got != tt.want {
+				t.Errorf("shouldFireDaily(%d:%d, target %d:%d) = %v, want %v", tt.h, tt.m, tHour, tMin, got, tt.want)
+			}
+		})
+	}
+}

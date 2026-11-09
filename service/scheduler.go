@@ -174,8 +174,12 @@ func (s *Scheduler) checkAndTrigger() error {
 				localNow := now.In(loc)
 				currentHour := localNow.Hour()
 				currentMin := localNow.Minute()
-				// Trigger if we're within the configured hour/minute (check happens every check_interval)
-				shouldTrigger := currentHour == targetHour && currentMin == targetMin
+				// Trigger once per day when the local time is at or past the
+				// configured time. shouldFireDaily's "currentHour > targetHour"
+				// arm is a catch-up so a pod that restarts after the scheduled
+				// time (or first starts late in the day) still fires today's
+				// report instead of missing it entirely until the next morning.
+				shouldTrigger := shouldFireDaily(currentHour, currentMin, targetHour, targetMin)
 				// Check if we already sent today's report
 				today := localNow.Format("2006-01-02")
 				if shouldTrigger && s.lastDailyReport.In(loc).Format("2006-01-02") != today {
@@ -585,6 +589,18 @@ func (s *Scheduler) Running() bool {
 // StartTime returns the start time
 func (s *Scheduler) StartTime() time.Time {
 	return s.startTime
+}
+
+// shouldFireDaily reports whether the daily report should fire for the given
+// local clock time relative to the configured target time.
+//
+// It returns true when the current time-of-day is at or past the target time,
+// including catch-up for any hour strictly after the target hour. Combined with
+// the day guard in checkAndTrigger, this fires the report at most once per day
+// even when the process restarts after the scheduled time or first comes up
+// late in the day.
+func shouldFireDaily(currentHour, currentMin, targetHour, targetMin int) bool {
+	return currentHour > targetHour || (currentHour == targetHour && currentMin >= targetMin)
 }
 
 // parseDailyReportTime parses a time string in "HH:MM" format and returns hour and minute.
