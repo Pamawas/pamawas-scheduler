@@ -175,98 +175,19 @@ func (s *Scheduler) checkAndTrigger() error {
 	now := time.Now()
 
 	// Check for daily report
-	if s.config.EnableDailyReport {
-		// Parse the configured time and check if we're within a window
-		targetHour, targetMin, err := parseDailyReportTime(s.config.DailyReportTime)
-		if err != nil {
-			log.Error().Err(err).Str("daily_report_time", s.config.DailyReportTime).Msg("Failed to parse daily_report_time")
-		} else {
-			// Compare against the configured timezone, not the machine's local
-			// time. The pod may run in UTC while the report time is expressed in
-			// the configured timezone (e.g. "07:00" Asia/Jakarta).
-			loc, err := time.LoadLocation(s.config.DefaultTimezone)
-			if err != nil {
-				log.Error().Err(err).Str("timezone", s.config.DefaultTimezone).Msg("Failed to load timezone for daily report check")
-			} else {
-				localNow := now.In(loc)
-				currentHour := localNow.Hour()
-				currentMin := localNow.Minute()
-				// Trigger once per day when the local time is at or past the
-				// configured time. shouldFireDaily's "currentHour > targetHour"
-				// arm is a catch-up so a pod that restarts after the scheduled
-				// time (or first starts late in the day) still fires today's
-				// report instead of missing it entirely until the next morning.
-				shouldTrigger := shouldFireDaily(currentHour, currentMin, targetHour, targetMin)
-				// Check if we already sent today's report
-				today := localNow.Format("2006-01-02")
-
-				s.mu.Lock()
-				// Reset the per-day backoff bookkeeping when the calendar day
-				// changes, so a fresh day's first attempt is not held back by a
-				// stale backoff carried over from a prior day.
-				if !s.dailyReportFirstAttempt.IsZero() &&
-					s.dailyReportFirstAttempt.In(loc).Format("2006-01-02") != today {
-					s.dailyReportFirstAttempt = time.Time{}
-					s.lastDailyReportAttempt = time.Time{}
-				}
-
-				alreadySentToday := s.lastDailyReport.In(loc).Format("2006-01-02") == today
-
-				// The report is due when the trigger window is open today and it has
-				// not already succeeded, subject to the stepped retry backoff: the first
-				// attempt of the day fires immediately, then retries wait
-				// dailyReportFastBackoff for the first hour after that first attempt,
-				// then dailyReportSlowBackoff thereafter.
-				allowed := false
-				if shouldTrigger && !alreadySentToday {
-					if s.lastDailyReportAttempt.IsZero() {
-						allowed = true // first attempt of the day fires immediately
-					} else {
-						allowed = dailyReportRetryDue(now, s.dailyReportFirstAttempt, s.lastDailyReportAttempt)
-					}
-				}
-				s.mu.Unlock()
-
-				if allowed {
-					log.Info().Str("time", s.config.DailyReportTime).Msg("Time for daily report")
-					if err := s.triggerDailyReportForDate(localNow); err != nil {
-						log.Error().Err(err).Msg("Failed to trigger daily report")
-					} else {
-						s.mu.Lock()
-						s.lastDailyReport = now
-						s.metrics.LastDailyReport.Set(float64(now.Unix()))
-						s.metrics.DailyReportsTotal.Inc()
-						s.mu.Unlock()
-					}
-
-					// Record every attempt (success or failure) so the backoff is computed
-					// from the actual last attempt, not the check tick.
-					s.mu.Lock()
-					if s.dailyReportFirstAttempt.IsZero() {
-						s.dailyReportFirstAttempt = now
-					}
-					s.lastDailyReportAttempt = now
-					s.mu.Unlock()
-				}
-			}
-		}
+	if err := s.checkAndTriggerDaily(now); err != nil {
+		log.Error().Err(err).Msg("Failed to check daily report")
 	}
 
 	// Check for high severity incidents
-	if s.config.EnableHighSeverityAlert {
-		if err := s.checkHighSeverityIncidents(); err != nil {
-			log.Error().Err(err).Msg("Failed to check high severity incidents")
-		} else {
-			s.mu.Lock()
-			s.lastHighSeverityCheck = now
-			s.metrics.LastHighSeverityCheck.Set(float64(now.Unix()))
-			s.metrics.HighSeverityChecksTotal.Inc()
-			s.mu.Unlock()
-		}
+	if err := s.checkAndTriggerHighSeverity(now); err != nil {
+		log.Error().Err(err).Msg("Failed to check high severity incidents")
 	}
 
 	return nil
 }
+
+
 
 // triggerDailyReportForDate triggers a daily report for a specific date
 func (s *Scheduler) triggerDailyReportForDate(reportDate time.Time) error {
@@ -610,6 +531,25 @@ func (s *Scheduler) filterEligibleIncidents(ctx context.Context, incidentIDs []s
 }
 
 // Stop stops the scheduler gracefully
+
+func (s *Scheduler) checkAndTriggerHighSeverity(now time.Time) error {
+	if !s.config.EnableHighSeverityAlert {
+		return nil
+	}
+
+	if err := s.checkHighSeverityIncidents(); err != nil {
+		return err
+	}
+
+	s.mu.Lock()
+	s.lastHighSeverityCheck = now
+	s.metrics.LastHighSeverityCheck.Set(float64(now.Unix()))
+	s.metrics.HighSeverityChecksTotal.Inc()
+	s.mu.Unlock()
+
+	return nil
+}
+
 func (s *Scheduler) Stop() {
 	s.cancelFunc()
 	s.wg.Wait()
@@ -689,3 +629,91 @@ func parseDailyReportTime(timeStr string) (hour, minute int, err error) {
 	}
 	return hour, minute, nil
 }
+
+func (s *Scheduler) checkAndTriggerDaily(now time.Time) error {
+	if !s.config.EnableDailyReport {
+		return nil
+	}
+
+	// Parse the configured time and check if we're within a window
+	targetHour, targetMin, err := parseDailyReportTime(s.config.DailyReportTime)
+	if err != nil {
+		log.Error().Err(err).Str("daily_report_time", s.config.DailyReportTime).Msg("Failed to parse daily_report_time")
+		return err
+	}
+
+	// Compare against the configured timezone, not the machine's local
+	// time. The pod may run in UTC while the report time is expressed in
+	// the configured timezone (e.g. "07:00" Asia/Jakarta).
+	loc, err := time.LoadLocation(s.config.DefaultTimezone)
+	if err != nil {
+		log.Error().Err(err).Str("timezone", s.config.DefaultTimezone).Msg("Failed to load timezone for daily report check")
+		return err
+	}
+
+	localNow := now.In(loc)
+	currentHour := localNow.Hour()
+	currentMin := localNow.Minute()
+
+	// Trigger once per day when the local time is at or past the
+	// configured time. shouldFireDaily's "currentHour > targetHour"
+	// arm is a catch-up so a pod that restarts after the scheduled
+	// time (or first starts late in the day) still fires today's
+	// report instead of missing it entirely until the next morning.
+	shouldTrigger := shouldFireDaily(currentHour, currentMin, targetHour, targetMin)
+	// Check if we already sent today's report
+	today := localNow.Format("2006-01-02")
+
+	s.mu.Lock()
+	// Reset the per-day backoff bookkeeping when the calendar day
+	// changes, so a fresh day's first attempt is not held back by a
+	// stale backoff carried over from a prior day.
+	if !s.dailyReportFirstAttempt.IsZero() &&
+		s.dailyReportFirstAttempt.In(loc).Format("2006-01-02") != today {
+		s.dailyReportFirstAttempt = time.Time{}
+		s.lastDailyReportAttempt = time.Time{}
+	}
+
+	alreadySentToday := s.lastDailyReport.In(loc).Format("2006-01-02") == today
+
+	// The report is due when the trigger window is open today and it has
+	// not already succeeded, subject to the stepped retry backoff: the first
+	// attempt of the day fires immediately, then retries wait
+	// dailyReportFastBackoff for the first hour after that first attempt,
+	// then dailyReportSlowBackoff thereafter.
+	allowed := false
+	if shouldTrigger && !alreadySentToday {
+		if s.lastDailyReportAttempt.IsZero() {
+			allowed = true // first attempt of the day fires immediately
+		} else {
+			allowed = dailyReportRetryDue(now, s.dailyReportFirstAttempt, s.lastDailyReportAttempt)
+		}
+	}
+	s.mu.Unlock()
+
+	if allowed {
+		log.Info().Str("time", s.config.DailyReportTime).Msg("Time for daily report")
+		if err := s.triggerDailyReportForDate(localNow); err != nil {
+			log.Error().Err(err).Msg("Failed to trigger daily report")
+			return err
+		} else {
+			s.mu.Lock()
+			s.lastDailyReport = now
+			s.metrics.LastDailyReport.Set(float64(now.Unix()))
+			s.metrics.DailyReportsTotal.Inc()
+			s.mu.Unlock()
+		}
+
+		// Record every attempt (success or failure) so the backoff is computed
+		// from the actual last attempt, not the check tick.
+		s.mu.Lock()
+		if s.dailyReportFirstAttempt.IsZero() {
+			s.dailyReportFirstAttempt = now
+		}
+		s.lastDailyReportAttempt = now
+		s.mu.Unlock()
+	}
+
+	return nil
+}
+
