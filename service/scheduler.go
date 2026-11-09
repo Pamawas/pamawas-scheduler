@@ -164,22 +164,31 @@ func (s *Scheduler) checkAndTrigger() error {
 		if err != nil {
 			log.Error().Err(err).Str("daily_report_time", s.config.DailyReportTime).Msg("Failed to parse daily_report_time")
 		} else {
-			currentHour := now.Hour()
-			currentMin := now.Minute()
-			// Trigger if we're within the configured hour/minute (check happens every check_interval)
-			shouldTrigger := currentHour == targetHour && currentMin == targetMin
-			// Check if we already sent today's report
-			today := now.Format("2006-01-02")
-			if shouldTrigger && s.lastDailyReport.Format("2006-01-02") != today {
-				log.Info().Str("time", s.config.DailyReportTime).Msg("Time for daily report")
-				if err := s.triggerDailyReportForDate(now); err != nil {
-					log.Error().Err(err).Msg("Failed to trigger daily report")
-				} else {
-					s.mu.Lock()
-					s.lastDailyReport = now
-					s.metrics.LastDailyReport.Set(float64(now.Unix()))
-					s.metrics.DailyReportsTotal.Inc()
-					s.mu.Unlock()
+			// Compare against the configured timezone, not the machine's local
+			// time. The pod may run in UTC while the report time is expressed in
+			// the configured timezone (e.g. "07:00" Asia/Jakarta).
+			loc, err := time.LoadLocation(s.config.DefaultTimezone)
+			if err != nil {
+				log.Error().Err(err).Str("timezone", s.config.DefaultTimezone).Msg("Failed to load timezone for daily report check")
+			} else {
+				localNow := now.In(loc)
+				currentHour := localNow.Hour()
+				currentMin := localNow.Minute()
+				// Trigger if we're within the configured hour/minute (check happens every check_interval)
+				shouldTrigger := currentHour == targetHour && currentMin == targetMin
+				// Check if we already sent today's report
+				today := localNow.Format("2006-01-02")
+				if shouldTrigger && s.lastDailyReport.In(loc).Format("2006-01-02") != today {
+					log.Info().Str("time", s.config.DailyReportTime).Msg("Time for daily report")
+					if err := s.triggerDailyReportForDate(localNow); err != nil {
+						log.Error().Err(err).Msg("Failed to trigger daily report")
+					} else {
+						s.mu.Lock()
+						s.lastDailyReport = now
+						s.metrics.LastDailyReport.Set(float64(now.Unix()))
+						s.metrics.DailyReportsTotal.Inc()
+						s.mu.Unlock()
+					}
 				}
 			}
 		}
