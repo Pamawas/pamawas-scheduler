@@ -451,3 +451,52 @@ func TestShouldFireDaily(t *testing.T) {
 		})
 	}
 }
+
+func TestDailyReportBackoffAndRetry(t *testing.T) {
+	// Reference start of day (first allowed attempt) at 07:00 UTC
+	base := time.Date(2026, 8, 16, 7, 0, 0, 0, time.UTC)
+
+	cases := []struct {
+		name               string
+		nowOffset           time.Duration // how far after base we are checking
+		lastAttemptOffset   time.Duration // offset of the last attempt relative to base (0 => same as base)
+		wantAllowed         bool
+	}{
+		{"first attempt allowed", 0, 0, true},
+		{"5min later, not allowed", 5 * time.Minute, 0, false},
+		{"10min later, allowed", 10 * time.Minute, 0, true},
+		{"30min later, allowed (still fast window)", 30 * time.Minute, 10 * time.Minute, true},
+		{"59min later, allowed (still fast)", 59 * time.Minute, 49 * time.Minute, true},
+		{"60min later, allowed (edge fast)", 60 * time.Minute, 50 * time.Minute, true},
+		{"90min later, not allowed (slow backoff not elapsed)", 90 * time.Minute, 60 * time.Minute, false},
+		{"120min later, allowed (slow backoff elapsed)", 120 * time.Minute, 60 * time.Minute, true},
+	}
+
+	for _, tt := range cases {
+		tt := tt // capture range variable
+		t.Run(tt.name, func(t *testing.T) {
+			now := base.Add(tt.nowOffset)
+			firstAttempt := base // first attempt is always at base for this day
+
+			var lastAttempt time.Time
+			if tt.lastAttemptOffset == 0 && tt.nowOffset == 0 {
+				// Simulate no prior attempt (zero value)
+				lastAttempt = time.Time{}
+			} else {
+				// last attempt occurred at base + offset
+				lastAttempt = base.Add(tt.lastAttemptOffset)
+			}
+
+			var allowed bool
+			if lastAttempt.IsZero() {
+				allowed = true // first attempt
+			} else {
+				allowed = dailyReportRetryDue(now, firstAttempt, lastAttempt)
+			}
+
+			if allowed != tt.wantAllowed {
+				t.Fatalf("allowed=%v, want %v (now=%v, lastAttempt=%v)", allowed, tt.wantAllowed, now, lastAttempt)
+			}
+		})
+	}
+}

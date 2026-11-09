@@ -17,6 +17,21 @@ import (
 	"github.com/Pamawas/pamawas-scheduler/models"
 )
 
+// Daily report retry backoff.
+//
+// The first attempt fires as soon as the trigger window opens (at 07:00, or
+// immediately on boot if the pod starts after that). If it fails (reporter down,
+// DB error, etc.) we retry instead of hammering the reporter on every check
+// tick. Retries are spaced dailyReportFastBackoff apart for the first
+// dailyReportFastWindow after the first attempt of the day, then every
+// dailyReportSlowBackoff thereafter. Success is still gated to at most once per
+// calendar day by lastDailyReport.
+const (
+	dailyReportFastBackoff = 10 * time.Minute
+	dailyReportSlowBackoff = time.Hour
+	dailyReportFastWindow  = time.Hour
+)
+
 // SchedulerConfig holds the configuration for the scheduler
 type SchedulerConfig struct {
 	ReporterURL             string
@@ -84,18 +99,20 @@ func (c *ReporterClient) SendReportRequest(payload ReportPayload) error {
 
 // Scheduler holds the database connection and scheduling logic
 type Scheduler struct {
-	db                    *sql.DB
-	config                SchedulerConfig
-	mu                    sync.Mutex
-	lastDailyReport       time.Time
-	lastHighSeverityCheck time.Time
-	running               bool
-	wg                    sync.WaitGroup
-	ctx                   context.Context
-	cancelFunc            context.CancelFunc
-	startTime             time.Time
-	reporter              *ReporterClient
-	metrics               *metrics.Metrics
+	db                      *sql.DB
+	config                  SchedulerConfig
+	mu                      sync.Mutex
+	lastDailyReport         time.Time
+	lastDailyReportAttempt  time.Time
+	dailyReportFirstAttempt time.Time
+	lastHighSeverityCheck   time.Time
+	running                 bool
+	wg                      sync.WaitGroup
+	ctx                     context.Context
+	cancelFunc              context.CancelFunc
+	startTime               time.Time
+	reporter                *ReporterClient
+	metrics                 *metrics.Metrics
 }
 
 // NewScheduler creates a new scheduler instance
@@ -182,7 +199,35 @@ func (s *Scheduler) checkAndTrigger() error {
 				shouldTrigger := shouldFireDaily(currentHour, currentMin, targetHour, targetMin)
 				// Check if we already sent today's report
 				today := localNow.Format("2006-01-02")
-				if shouldTrigger && s.lastDailyReport.In(loc).Format("2006-01-02") != today {
+
+				s.mu.Lock()
+				// Reset the per-day backoff bookkeeping when the calendar day
+				// changes, so a fresh day's first attempt is not held back by a
+				// stale backoff carried over from a prior day.
+				if !s.dailyReportFirstAttempt.IsZero() &&
+					s.dailyReportFirstAttempt.In(loc).Format("2006-01-02") != today {
+					s.dailyReportFirstAttempt = time.Time{}
+					s.lastDailyReportAttempt = time.Time{}
+				}
+
+				alreadySentToday := s.lastDailyReport.In(loc).Format("2006-01-02") == today
+
+				// The report is due when the trigger window is open today and it has
+				// not already succeeded, subject to the stepped retry backoff: the first
+				// attempt of the day fires immediately, then retries wait
+				// dailyReportFastBackoff for the first hour after that first attempt,
+				// then dailyReportSlowBackoff thereafter.
+				allowed := false
+				if shouldTrigger && !alreadySentToday {
+					if s.lastDailyReportAttempt.IsZero() {
+						allowed = true // first attempt of the day fires immediately
+					} else {
+						allowed = dailyReportRetryDue(now, s.dailyReportFirstAttempt, s.lastDailyReportAttempt)
+					}
+				}
+				s.mu.Unlock()
+
+				if allowed {
 					log.Info().Str("time", s.config.DailyReportTime).Msg("Time for daily report")
 					if err := s.triggerDailyReportForDate(localNow); err != nil {
 						log.Error().Err(err).Msg("Failed to trigger daily report")
@@ -193,6 +238,15 @@ func (s *Scheduler) checkAndTrigger() error {
 						s.metrics.DailyReportsTotal.Inc()
 						s.mu.Unlock()
 					}
+
+					// Record every attempt (success or failure) so the backoff is computed
+					// from the actual last attempt, not the check tick.
+					s.mu.Lock()
+					if s.dailyReportFirstAttempt.IsZero() {
+						s.dailyReportFirstAttempt = now
+					}
+					s.lastDailyReportAttempt = now
+					s.mu.Unlock()
 				}
 			}
 		}
@@ -601,6 +655,27 @@ func (s *Scheduler) StartTime() time.Time {
 // late in the day.
 func shouldFireDaily(currentHour, currentMin, targetHour, targetMin int) bool {
 	return currentHour > targetHour || (currentHour == targetHour && currentMin >= targetMin)
+}
+
+// dailyReportBackoff returns the wait required before the next daily report
+// retry, given when the first attempt of the day happened. Retries are spaced
+// dailyReportFastBackoff apart for the first dailyReportFastWindow after the
+// first attempt (so a transient failure near 07:00 is recovered within minutes),
+// then dailyReportSlowBackoff thereafter to avoid hammering a still-down
+// reporter for the rest of the day.
+func dailyReportBackoff(now, firstAttempt time.Time) time.Duration {
+	if now.Sub(firstAttempt) > dailyReportFastWindow {
+		return dailyReportSlowBackoff
+	}
+	return dailyReportFastBackoff
+}
+
+// dailyReportRetryDue reports whether enough time has elapsed since the last
+// attempt to retry the daily report, applying the stepped backoff of
+// dailyReportBackoff. firstAttempt must be non-zero (it is guaranteed by the
+// caller: the first attempt of a day bypasses this check entirely).
+func dailyReportRetryDue(now, firstAttempt, lastAttempt time.Time) bool {
+	return now.Sub(lastAttempt) >= dailyReportBackoff(now, firstAttempt)
 }
 
 // parseDailyReportTime parses a time string in "HH:MM" format and returns hour and minute.
