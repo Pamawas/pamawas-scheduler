@@ -173,7 +173,7 @@ func (h *Handler) CreateHighSeverityReportRequest(w http.ResponseWriter, r *http
 	}
 
 	status := http.StatusAccepted
-	if resp.Duplicate {
+	if resp.Duplicate || resp.Status == "no_eligible_incidents" {
 		status = http.StatusOK
 	}
 	w.WriteHeader(status)

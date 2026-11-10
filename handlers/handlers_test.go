@@ -247,7 +247,7 @@ func TestCreateHighSeverityReportRequest_NoEligible(t *testing.T) {
 	req := httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/v1/report-requests/high-severity", strings.NewReader(body))
 	h.CreateHighSeverityReportRequest(rr, req)
 
-	require.Equal(t, http.StatusAccepted, rr.Code)
+	require.Equal(t, http.StatusOK, rr.Code)
 	var resp models.ReportRequestResponse
 	require.NoError(t, json.NewDecoder(rr.Body).Decode(&resp))
 	require.Equal(t, 0, resp.EligibleCount)

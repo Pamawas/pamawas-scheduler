@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"strings"
@@ -30,6 +31,7 @@ const (
 	dailyReportFastBackoff = 10 * time.Minute
 	dailyReportSlowBackoff = time.Hour
 	dailyReportFastWindow  = time.Hour
+	reporterRequestTimeout = 8 * time.Minute
 )
 
 // SchedulerConfig holds the configuration for the scheduler
@@ -54,7 +56,7 @@ type ReporterClient struct {
 func NewReporterClient(baseURL string, ctx context.Context) *ReporterClient {
 	return &ReporterClient{
 		baseURL:    baseURL,
-		httpClient: &http.Client{Timeout: 10 * time.Second},
+		httpClient: &http.Client{Timeout: reporterRequestTimeout},
 		ctx:        ctx,
 	}
 }
@@ -218,8 +220,6 @@ func (s *Scheduler) checkAndTrigger() error {
 	return nil
 }
 
-
-
 // triggerDailyReportForDate triggers a daily report for a specific date
 func (s *Scheduler) triggerDailyReportForDate(reportDate time.Time) error {
 	dateStr := reportDate.Format("2006-01-02")
@@ -308,6 +308,9 @@ func (s *Scheduler) CreateHighSeverityReportRequest(ctx context.Context, inciden
 	}
 
 	if len(eligibleIncidentIDs) == 0 {
+		log.Info().
+			Str("threshold", s.config.HighSeverityThreshold).
+			Msg("No eligible high severity incidents; report request not dispatched")
 		resp.RequestID = ""
 		resp.RequestType = "high_severity"
 		resp.EligibleCount = 0
@@ -333,6 +336,17 @@ func (s *Scheduler) CreateHighSeverityReportRequest(ctx context.Context, inciden
 		if err != nil {
 			log.Error().Err(err).Str("incident_id", incidentID).Msg("Failed to insert high severity report request")
 			continue
+		}
+
+		if isDup {
+			requeued, requeueErr := s.requeueStaleReportRequest(ctx, requestID)
+			if requeueErr != nil {
+				log.Error().Err(requeueErr).Str("request_id", requestID).Msg("Failed to requeue stale high severity report request")
+				continue
+			}
+			if requeued {
+				isDup = false
+			}
 		}
 
 		if firstRequestID == "" {
@@ -382,7 +396,7 @@ func (s *Scheduler) insertReportRequest(ctx context.Context, requestType string,
 		INSERT INTO report_requests (id, request_type, period_start, period_end, timezone, idempotency_hash, status, attempts, created_at, updated_at)
 		VALUES ($1, $2, $3, $4, $5, $6, 'pending', 0, now(), now())
 		ON CONFLICT (idempotency_hash) DO UPDATE SET
-			updated_at = now()
+			updated_at = report_requests.updated_at
 		RETURNING id, (xmax = 0) as inserted
 	`
 
@@ -394,6 +408,39 @@ func (s *Scheduler) insertReportRequest(ctx context.Context, requestType string,
 	}
 
 	return returnedID, !inserted, nil
+}
+
+func (s *Scheduler) requeueStaleReportRequest(ctx context.Context, requestID string) (bool, error) {
+	const query = `
+		UPDATE report_requests
+		SET status = 'pending',
+		    next_attempt_at = NULL,
+		    lease_expires_at = NULL,
+		    safe_error_code = NULL,
+		    updated_at = now()
+		WHERE id = $1
+		  AND (
+		    (status = 'generating' AND (lease_expires_at IS NULL OR lease_expires_at < now()))
+		    OR (status = 'failed_retryable' AND (next_attempt_at IS NULL OR next_attempt_at <= now()))
+		    OR (status = 'pending' AND updated_at < now() - interval '10 minutes')
+		  )
+		  AND NOT EXISTS (
+		    SELECT 1 FROM reports WHERE request_id = $1
+		  )
+		RETURNING id
+	`
+
+	var requeuedID string
+	err := s.db.QueryRowContext(ctx, query, requestID).Scan(&requeuedID)
+	if errors.Is(err, sql.ErrNoRows) {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+
+	log.Info().Str("request_id", requeuedID).Msg("Requeued stale report request")
+	return true, nil
 }
 
 // severityRank returns the numeric rank for a severity string. Higher values
@@ -436,8 +483,14 @@ func (s *Scheduler) checkHighSeverityIncidents() error {
 		AND NOT EXISTS (
 			SELECT 1 FROM report_requests rr
 			WHERE rr.request_type = 'high_severity'
-			AND rr.status IN ('pending', 'generating', 'generated')
 			AND rr.idempotency_hash LIKE '%' || incidents.id || '%'
+			AND (
+				rr.status = 'generated'
+				OR (rr.status = 'pending' AND rr.updated_at >= now() - interval '10 minutes')
+				OR (rr.status = 'generating' AND rr.lease_expires_at >= now())
+				OR (rr.status = 'failed_retryable' AND rr.next_attempt_at > now())
+				OR EXISTS (SELECT 1 FROM reports r WHERE r.request_id = rr.id)
+			)
 		)
 	`
 
@@ -482,8 +535,14 @@ func (s *Scheduler) getEligibleHighSeverityIncidents(ctx context.Context) ([]str
 		AND NOT EXISTS (
 			SELECT 1 FROM report_requests rr
 			WHERE rr.request_type = 'high_severity'
-			AND rr.status IN ('pending', 'generating', 'generated')
 			AND rr.idempotency_hash LIKE '%' || incidents.id || '%'
+			AND (
+				rr.status = 'generated'
+				OR (rr.status = 'pending' AND rr.updated_at >= now() - interval '10 minutes')
+				OR (rr.status = 'generating' AND rr.lease_expires_at >= now())
+				OR (rr.status = 'failed_retryable' AND rr.next_attempt_at > now())
+				OR EXISTS (SELECT 1 FROM reports r WHERE r.request_id = rr.id)
+			)
 		)
 	`
 
@@ -534,8 +593,14 @@ func (s *Scheduler) filterEligibleIncidents(ctx context.Context, incidentIDs []s
 		AND NOT EXISTS (
 			SELECT 1 FROM report_requests rr
 			WHERE rr.request_type = 'high_severity'
-			AND rr.status IN ('pending', 'generating', 'generated')
 			AND rr.idempotency_hash LIKE '%' || incidents.id || '%'
+			AND (
+				rr.status = 'generated'
+				OR (rr.status = 'pending' AND rr.updated_at >= now() - interval '10 minutes')
+				OR (rr.status = 'generating' AND rr.lease_expires_at >= now())
+				OR (rr.status = 'failed_retryable' AND rr.next_attempt_at > now())
+				OR EXISTS (SELECT 1 FROM reports r WHERE r.request_id = rr.id)
+			)
 		)
 	`
 
@@ -751,4 +816,3 @@ func (s *Scheduler) checkAndTriggerDaily(now time.Time) error {
 
 	return nil
 }
-

@@ -328,10 +328,59 @@ func TestCreateHighSeverityReportRequest_DuplicatePerIncident(t *testing.T) {
 		WithArgs(sqlmock.AnyArg(), "high_severity", sqlmock.AnyArg(), sqlmock.AnyArg(), "UTC", sqlmock.AnyArg()).
 		WillReturnRows(sqlmock.NewRows([]string{"id", "inserted"}).AddRow("rreq_01TEST987654321098765432109876", false))
 
+	mock.ExpectQuery("UPDATE report_requests").
+		WithArgs("rreq_01TEST987654321098765432109876").
+		WillReturnRows(sqlmock.NewRows([]string{"id"}))
+
 	resp, err := s.CreateHighSeverityReportRequest(context.Background(), []string{"inc_01TEST123456789012345678901234"}, false)
 	require.NoError(t, err)
 	require.True(t, resp.Duplicate)
 	require.Equal(t, "exists", resp.Status)
+}
+
+func TestCreateHighSeverityReportRequest_RequeuesStaleRequest(t *testing.T) {
+	requestReceived := make(chan ReportPayload, 1)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost || r.URL.Path != "/api/v1/reports" {
+			t.Errorf("unexpected reporter request: %s %s", r.Method, r.URL.Path)
+		}
+		var payload ReportPayload
+		if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+			t.Errorf("failed to decode reporter payload: %v", err)
+			return
+		}
+		requestReceived <- payload
+		w.WriteHeader(http.StatusAccepted)
+	}))
+	defer server.Close()
+
+	s, mock := newMockScheduler(t, SchedulerConfig{ReporterURL: server.URL, HighSeverityThreshold: "high"})
+	defer s.reporter.Close()
+
+	mock.ExpectQuery("SELECT id FROM incidents WHERE id = ANY").
+		WithArgs(sqlmock.AnyArg(), 4).
+		WillReturnRows(sqlmock.NewRows([]string{"id"}).AddRow("inc_01TEST123456789012345678901234"))
+	mock.ExpectQuery("INSERT INTO report_requests").
+		WithArgs(sqlmock.AnyArg(), "high_severity", sqlmock.AnyArg(), sqlmock.AnyArg(), "UTC", sqlmock.AnyArg()).
+		WillReturnRows(sqlmock.NewRows([]string{"id", "inserted"}).AddRow("rreq_01TEST987654321098765432109876", false))
+	mock.ExpectQuery("UPDATE report_requests").
+		WithArgs("rreq_01TEST987654321098765432109876").
+		WillReturnRows(sqlmock.NewRows([]string{"id"}).AddRow("rreq_01TEST987654321098765432109876"))
+
+	resp, err := s.CreateHighSeverityReportRequest(context.Background(), []string{"inc_01TEST123456789012345678901234"}, false)
+	require.NoError(t, err)
+	require.False(t, resp.Duplicate)
+	require.Equal(t, "pending", resp.Status)
+
+	s.reporter.Close()
+	select {
+	case payload := <-requestReceived:
+		require.Equal(t, "rreq_01TEST987654321098765432109876", payload.RequestID)
+		require.Equal(t, []string{"inc_01TEST123456789012345678901234"}, payload.IncidentIDs)
+	case <-time.After(time.Second):
+		t.Fatal("stale report request was not dispatched")
+	}
+	require.NoError(t, mock.ExpectationsWereMet())
 }
 
 func TestTriggerDailyReportForDate(t *testing.T) {
@@ -483,10 +532,10 @@ func TestDailyReportBackoffAndRetry(t *testing.T) {
 	base := time.Date(2026, 8, 16, 7, 0, 0, 0, time.UTC)
 
 	cases := []struct {
-		name               string
-		nowOffset           time.Duration // how far after base we are checking
-		lastAttemptOffset   time.Duration // offset of the last attempt relative to base (0 => same as base)
-		wantAllowed         bool
+		name              string
+		nowOffset         time.Duration // how far after base we are checking
+		lastAttemptOffset time.Duration // offset of the last attempt relative to base (0 => same as base)
+		wantAllowed       bool
 	}{
 		{"first attempt allowed", 0, 0, true},
 		{"5min later, not allowed", 5 * time.Minute, 0, false},
