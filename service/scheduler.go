@@ -48,6 +48,7 @@ type ReporterClient struct {
 	baseURL    string
 	httpClient *http.Client
 	ctx        context.Context
+	wg         sync.WaitGroup
 }
 
 func NewReporterClient(baseURL string, ctx context.Context) *ReporterClient {
@@ -95,6 +96,36 @@ func (c *ReporterClient) SendReportRequest(payload ReportPayload) error {
 		return fmt.Errorf("reporter returned status %d", resp.StatusCode)
 	}
 	return nil
+}
+
+// SendReportRequestAsync dispatches the report request to the reporter without
+// blocking the caller. It is safe to fire-and-forget here because the caller has
+// already committed the report_requests row (idempotency hash) before invoking
+// this method, so a slow or unreachable reporter cannot stall the scheduler tick
+// loop nor cause a duplicate report. A panic in the send is recovered so the
+// scheduler worker is never torn down by a misbehaving reporter. In-flight sends
+// are drained by Close; the caller should cancel the client context first.
+func (c *ReporterClient) SendReportRequestAsync(payload ReportPayload) {
+	c.wg.Add(1)
+	go func() {
+		defer c.wg.Done()
+		defer func() {
+			if r := recover(); r != nil {
+				log.Error().Interface("panic", r).Str("request_id", payload.RequestID).Msg("Recovered panic sending report request to reporter")
+			}
+		}()
+		if err := c.SendReportRequest(payload); err != nil {
+			log.Error().Err(err).Str("request_id", payload.RequestID).Str("report_type", payload.ReportType).Msg("Failed to send report request to reporter")
+		}
+	}()
+}
+
+// Close waits for any in-flight async report sends to complete. The caller
+// should cancel the client context (via Scheduler.Stop) first so that requests
+// still in-flight are aborted promptly instead of waiting out the full client
+// timeout.
+func (c *ReporterClient) Close() {
+	c.wg.Wait()
 }
 
 // Scheduler holds the database connection and scheduling logic
@@ -310,7 +341,10 @@ func (s *Scheduler) CreateHighSeverityReportRequest(ctx context.Context, inciden
 		}
 
 		if !isDup {
-			// Send to reporter for each new request
+			// Send to reporter for each new request. Dispatched asynchronously:
+			// the report_requests row is already committed above, so a slow or
+			// unreachable reporter must not block the scheduler tick loop (which
+			// would also stall the daily report and later high-severity checks).
 			payload := ReportPayload{
 				ContractVersion: 1,
 				RequestID:       requestID,
@@ -320,11 +354,8 @@ func (s *Scheduler) CreateHighSeverityReportRequest(ctx context.Context, inciden
 				Timezone:        "UTC",
 				IncidentIDs:     []string{incidentID},
 			}
-			if err := s.reporter.SendReportRequest(payload); err != nil {
-				log.Error().Err(err).Str("request_id", requestID).Msg("Failed to send high severity report request to reporter")
-			} else {
-				log.Info().Str("request_id", requestID).Str("incident_id", incidentID).Msg("High severity report request sent to reporter")
-			}
+			s.reporter.SendReportRequestAsync(payload)
+			log.Info().Str("request_id", requestID).Str("incident_id", incidentID).Msg("High severity report request dispatched to reporter")
 		}
 	}
 
@@ -553,6 +584,10 @@ func (s *Scheduler) checkAndTriggerHighSeverity(now time.Time) error {
 func (s *Scheduler) Stop() {
 	s.cancelFunc()
 	s.wg.Wait()
+	// Drain any in-flight async report sends. s.ctx (the reporter's context) was
+	// cancelled above, so these abort promptly rather than waiting out the full
+	// client timeout.
+	s.reporter.Close()
 }
 
 // MuLock locks the scheduler mutex

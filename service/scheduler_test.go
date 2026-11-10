@@ -96,12 +96,35 @@ func TestReporterClientTriggersRequests(t *testing.T) {
 }
 
 func TestReporterClientReturnsHTTPError(t *testing.T) {
-	server := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) { http.Error(nil, "", http.StatusBadGateway) }))
-	defer server.Close()
 	client := NewReporterClient("http://127.0.0.1:1", context.Background())
 	if err := client.SendReportRequest(ReportPayload{}); err == nil {
 		t.Fatal("expected transport error")
 	}
+}
+
+// TestReporterClientSendAsyncDoesNotBlock verifies that the async dispatcher
+// returns before a slow reporter responds, so it can never stall the scheduler
+// tick loop.
+func TestReporterClientSendAsyncDoesNotBlock(t *testing.T) {
+	release := make(chan struct{})
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		<-release // hold the response open until the test releases it
+		w.WriteHeader(http.StatusAccepted)
+	}))
+	defer server.Close()
+
+	client := NewReporterClient(server.URL, context.Background())
+
+	// The held-open request would keep SendReportRequest blocking for the full
+	// client timeout; the async dispatch must return well before that.
+	start := time.Now()
+	client.SendReportRequestAsync(ReportPayload{RequestID: "rreq_async", ReportType: "high_severity"})
+	if elapsed := time.Since(start); elapsed >= 100*time.Millisecond {
+		t.Fatalf("SendReportRequestAsync blocked on a slow reporter: %s", elapsed)
+	}
+
+	close(release) // release the in-flight request
+	client.Close() // drain the async send so the test can assert cleanly
 }
 
 func TestCheckHighSeverityIncidentsNoMatches(t *testing.T) {
@@ -163,6 +186,9 @@ func TestCheckHighSeverityIncidentsTriggersAlert(t *testing.T) {
 	if err := s.checkHighSeverityIncidents(); err != nil {
 		t.Fatal(err)
 	}
+	// The request to the reporter is dispatched asynchronously; wait for the
+	// in-flight send to complete before asserting it reached the server.
+	s.reporter.Close()
 	if !received {
 		t.Fatal("alert was not sent")
 	}
