@@ -20,6 +20,17 @@ type Config struct {
 	EnableHighSeverityAlert bool
 	Mode                    string
 	DefaultTimezone         string
+	// Notification channel fields for Phase 1 real-time high-severity alerts.
+	DiscordWebhookURL  string
+	TelegramBotToken   string
+	TelegramChatID     string
+	TelegramAPIBaseURL string
+	EmailSMTPHost      string
+	EmailSMTPPort      int
+	EmailUsername      string
+	EmailPassword      string
+	EmailFrom          string
+	EmailTo            string
 }
 
 func Load() Config {
@@ -70,6 +81,36 @@ func Load() Config {
 	}
 	if err := v.BindEnv("otel_exporter_otlp_endpoint", "OTEL_EXPORTER_OTLP_ENDPOINT", "PAMAWAS_SCHEDULER_OTEL_EXPORTER_OTLP_ENDPOINT"); err != nil {
 		panic(fmt.Sprintf("failed to bind OTEL_EXPORTER_OTLP_ENDPOINT env: %v", err))
+	}
+	if err := v.BindEnv("discord_webhook_url", "DISCORD_WEBHOOK_URL", "PAMAWAS_SCHEDULER_DISCORD_WEBHOOK_URL"); err != nil {
+		panic(fmt.Sprintf("failed to bind DISCORD_WEBHOOK_URL env: %v", err))
+	}
+	if err := v.BindEnv("telegram_bot_token", "TELEGRAM_BOT_TOKEN", "PAMAWAS_SCHEDULER_TELEGRAM_BOT_TOKEN"); err != nil {
+		panic(fmt.Sprintf("failed to bind TELEGRAM_BOT_TOKEN env: %v", err))
+	}
+	if err := v.BindEnv("telegram_chat_id", "TELEGRAM_CHAT_ID", "PAMAWAS_SCHEDULER_TELEGRAM_CHAT_ID"); err != nil {
+		panic(fmt.Sprintf("failed to bind TELEGRAM_CHAT_ID env: %v", err))
+	}
+	if err := v.BindEnv("telegram_api_base_url", "TELEGRAM_API_BASE_URL", "PAMAWAS_SCHEDULER_TELEGRAM_API_BASE_URL"); err != nil {
+		panic(fmt.Sprintf("failed to bind TELEGRAM_API_BASE_URL env: %v", err))
+	}
+	if err := v.BindEnv("email_smtp_host", "EMAIL_SMTP_HOST", "PAMAWAS_SCHEDULER_EMAIL_SMTP_HOST"); err != nil {
+		panic(fmt.Sprintf("failed to bind EMAIL_SMTP_HOST env: %v", err))
+	}
+	if err := v.BindEnv("email_smtp_port", "EMAIL_SMTP_PORT", "PAMAWAS_SCHEDULER_EMAIL_SMTP_PORT"); err != nil {
+		panic(fmt.Sprintf("failed to bind EMAIL_SMTP_PORT env: %v", err))
+	}
+	if err := v.BindEnv("email_username", "EMAIL_USERNAME", "PAMAWAS_SCHEDULER_EMAIL_USERNAME"); err != nil {
+		panic(fmt.Sprintf("failed to bind EMAIL_USERNAME env: %v", err))
+	}
+	if err := v.BindEnv("email_password", "EMAIL_PASSWORD", "PAMAWAS_SCHEDULER_EMAIL_PASSWORD"); err != nil {
+		panic(fmt.Sprintf("failed to bind EMAIL_PASSWORD env: %v", err))
+	}
+	if err := v.BindEnv("email_from", "EMAIL_FROM", "PAMAWAS_SCHEDULER_EMAIL_FROM"); err != nil {
+		panic(fmt.Sprintf("failed to bind EMAIL_FROM env: %v", err))
+	}
+	if err := v.BindEnv("email_to", "EMAIL_TO", "PAMAWAS_SCHEDULER_EMAIL_TO"); err != nil {
+		panic(fmt.Sprintf("failed to bind EMAIL_TO env: %v", err))
 	}
 
 	// Defaults

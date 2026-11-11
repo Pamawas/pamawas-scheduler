@@ -33,6 +33,17 @@ func NewHandler(db *sql.DB, cfg config.Config, m *metrics.Metrics) *Handler {
 		CheckInterval:           cfg.CheckInterval,
 		EnableDailyReport:       cfg.EnableDailyReport,
 		EnableHighSeverityAlert: cfg.EnableHighSeverityAlert,
+		DefaultTimezone:         cfg.DefaultTimezone,
+		DiscordWebhookURL:       cfg.DiscordWebhookURL,
+		TelegramBotToken:        cfg.TelegramBotToken,
+		TelegramChatID:          cfg.TelegramChatID,
+		TelegramAPIBaseURL:      cfg.TelegramAPIBaseURL,
+		EmailSMTPHost:           cfg.EmailSMTPHost,
+		EmailSMTPPort:           cfg.EmailSMTPPort,
+		EmailUsername:           cfg.EmailUsername,
+		EmailPassword:           cfg.EmailPassword,
+		EmailFrom:               cfg.EmailFrom,
+		EmailTo:                 cfg.EmailTo,
 	}
 
 	scheduler := service.NewScheduler(db, schedulerCfg, m)

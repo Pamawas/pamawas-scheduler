@@ -13,6 +13,7 @@ import (
 
 	"github.com/lib/pq"
 	"github.com/rs/zerolog/log"
+	"github.com/wneessen/go-mail"
 
 	"github.com/Pamawas/pamawas-scheduler/metrics"
 	"github.com/Pamawas/pamawas-scheduler/models"
@@ -43,6 +44,17 @@ type SchedulerConfig struct {
 	EnableDailyReport       bool
 	EnableHighSeverityAlert bool
 	DefaultTimezone         string
+	// Notification channel fields for Phase 1 real-time high-severity alerts.
+	DiscordWebhookURL  string
+	TelegramBotToken   string
+	TelegramChatID     string
+	TelegramAPIBaseURL string
+	EmailSMTPHost      string
+	EmailSMTPPort      int
+	EmailUsername      string
+	EmailPassword      string
+	EmailFrom          string
+	EmailTo            string
 }
 
 // ReporterClient is a client for triggering reports via the reporter service
@@ -59,6 +71,225 @@ func NewReporterClient(baseURL string, ctx context.Context) *ReporterClient {
 		httpClient: &http.Client{Timeout: reporterRequestTimeout},
 		ctx:        ctx,
 	}
+}
+
+// NotificationChannel represents a configured notification channel
+type NotificationChannel struct {
+	Name           string
+	DestinationKey string
+	Enabled        bool
+}
+
+// NotificationClient sends real-time alerts via configured channels
+type NotificationClient struct {
+	config    SchedulerConfig
+	httpClient *http.Client
+	ctx       context.Context
+	wg        sync.WaitGroup
+}
+
+func NewNotificationClient(cfg SchedulerConfig, ctx context.Context) *NotificationClient {
+	return &NotificationClient{
+		config:    cfg,
+		httpClient: &http.Client{Timeout: 10 * time.Second},
+		ctx:       ctx,
+	}
+}
+
+// EnabledChannels returns the list of configured notification channels
+func (n *NotificationClient) EnabledChannels() []NotificationChannel {
+	channels := []NotificationChannel{
+		{Name: "discord", DestinationKey: n.config.DiscordWebhookURL, Enabled: n.config.DiscordWebhookURL != ""},
+		{Name: "telegram", DestinationKey: n.config.TelegramChatID, Enabled: n.config.TelegramBotToken != "" && n.config.TelegramChatID != ""},
+		{Name: "email", DestinationKey: n.config.EmailTo, Enabled: n.config.EmailSMTPHost != "" && n.config.EmailUsername != "" && n.config.EmailPassword != "" && n.config.EmailTo != ""},
+	}
+
+	var enabled []NotificationChannel
+	for _, ch := range channels {
+		if ch.Enabled {
+			enabled = append(enabled, ch)
+		}
+	}
+	return enabled
+}
+
+// SendAlertAsync dispatches an immediate high-severity alert via all configured channels.
+// It is fire-and-forget so the scheduler tick loop is never blocked.
+func (n *NotificationClient) SendAlertAsync(incidentIDs []string, alertType string) {
+	if len(n.EnabledChannels()) == 0 {
+		log.Debug().Msg("No notification channels configured; skipping real-time alert")
+		return
+	}
+
+	n.wg.Add(1)
+	go func() {
+		defer n.wg.Done()
+		defer func() {
+			if r := recover(); r != nil {
+				log.Error().Interface("panic", r).Msg("Recovered panic sending real-time alert")
+			}
+		}()
+
+		content := n.buildAlertContent(incidentIDs, alertType)
+		if content == "" {
+			return
+		}
+
+		for _, ch := range n.EnabledChannels() {
+			switch ch.Name {
+			case "discord":
+				if err := n.sendDiscord(content); err != nil {
+					log.Error().Err(err).Str("channel", "discord").Msg("Failed to send real-time alert to Discord")
+				}
+			case "telegram":
+				if err := n.sendTelegram(content); err != nil {
+					log.Error().Err(err).Str("channel", "telegram").Msg("Failed to send real-time alert to Telegram")
+				}
+			case "email":
+				if err := n.sendEmail(content); err != nil {
+					log.Error().Err(err).Str("channel", "email").Msg("Failed to send real-time alert via email")
+				}
+			}
+		}
+	}()
+}
+
+// Close waits for any in-flight async alert sends to complete
+func (n *NotificationClient) Close() {
+	n.wg.Wait()
+}
+
+// buildAlertContent builds the real-time alert message content
+func (n *NotificationClient) buildAlertContent(incidentIDs []string, alertType string) string {
+	if len(incidentIDs) == 0 {
+		return ""
+	}
+
+	var sb strings.Builder
+	sb.WriteString("🚨 *Pamawas High-Severity Alert*\n")
+	sb.WriteString(fmt.Sprintf("Type: %s\n", alertType))
+	sb.WriteString(fmt.Sprintf("Incidents: %s\n", strings.Join(incidentIDs, ", ")))
+	sb.WriteString(fmt.Sprintf("Time: %s\n", time.Now().UTC().Format(time.RFC3339)))
+	sb.WriteString("Investigation will follow up with findings once complete.")
+	return sb.String()
+}
+
+// sendDiscord sends an alert message to Discord via webhook
+func (n *NotificationClient) sendDiscord(content string) error {
+	if n.config.DiscordWebhookURL == "" {
+		return nil
+	}
+	payload := map[string]interface{}{
+		"content":  content,
+		"username": "Pamawas Scheduler",
+	}
+	payloadBytes, err := json.Marshal(payload)
+	if err != nil {
+		return fmt.Errorf("failed to marshal Discord payload: %w", err)
+	}
+
+	req, err := http.NewRequestWithContext(n.ctx, http.MethodPost, n.config.DiscordWebhookURL, strings.NewReader(string(payloadBytes)))
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := n.httpClient.Do(req)
+	if err != nil {
+		return err
+	}
+	defer func() {
+		if closeErr := resp.Body.Close(); closeErr != nil {
+			log.Error().Err(closeErr).Msg("Failed to close Discord response body")
+		}
+	}()
+
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return fmt.Errorf("discord webhook returned status %d", resp.StatusCode)
+	}
+	log.Info().Msg("Real-time alert sent to Discord")
+	return nil
+}
+
+// sendTelegram sends an alert message to Telegram via Bot API
+func (n *NotificationClient) sendTelegram(content string) error {
+	if n.config.TelegramBotToken == "" || n.config.TelegramChatID == "" {
+		return nil
+	}
+	telegramBase := n.config.TelegramAPIBaseURL
+	if telegramBase == "" {
+		telegramBase = "https://api.telegram.org"
+	}
+	url := fmt.Sprintf("%s/bot%s/sendMessage", telegramBase, n.config.TelegramBotToken)
+	payload := map[string]interface{}{
+		"chat_id":    n.config.TelegramChatID,
+		"text":       content,
+		"parse_mode": "Markdown",
+	}
+	payloadBytes, err := json.Marshal(payload)
+	if err != nil {
+		return err
+	}
+
+	req, err := http.NewRequestWithContext(n.ctx, http.MethodPost, url, strings.NewReader(string(payloadBytes)))
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := n.httpClient.Do(req)
+	if err != nil {
+		return err
+	}
+	defer func() {
+		if closeErr := resp.Body.Close(); closeErr != nil {
+			log.Error().Err(closeErr).Msg("Failed to close Telegram response body")
+		}
+	}()
+
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return fmt.Errorf("telegram API returned status %d", resp.StatusCode)
+	}
+	log.Info().Msg("Real-time alert sent to Telegram")
+	return nil
+}
+
+// sendEmail sends an alert message via SMTP
+func (n *NotificationClient) sendEmail(content string) error {
+	if n.config.EmailSMTPHost == "" || n.config.EmailUsername == "" || n.config.EmailPassword == "" || n.config.EmailFrom == "" || n.config.EmailTo == "" {
+		return nil
+	}
+
+	client, err := mail.NewClient(n.config.EmailSMTPHost,
+		mail.WithPort(n.config.EmailSMTPPort),
+		mail.WithSMTPAuth(mail.SMTPAuthPlain),
+		mail.WithUsername(n.config.EmailUsername),
+		mail.WithPassword(n.config.EmailPassword),
+		mail.WithTLSPortPolicy(mail.TLSMandatory),
+	)
+	if err != nil {
+		return fmt.Errorf("failed to create SMTP client: %w", err)
+	}
+
+	msg := mail.NewMsg()
+	if err := msg.From(n.config.EmailFrom); err != nil {
+		return fmt.Errorf("failed to set from address: %w", err)
+	}
+	if err := msg.To(n.config.EmailTo); err != nil {
+		return fmt.Errorf("failed to set to address: %w", err)
+	}
+
+	msg.Subject("Pamawas High-Severity Alert")
+	msg.SetBodyString(mail.TypeTextPlain, content)
+
+	emailCtx, cancel := context.WithTimeout(n.ctx, 10*time.Second)
+	defer cancel()
+
+	if err := client.DialAndSendWithContext(emailCtx, msg); err != nil {
+		return fmt.Errorf("failed to send email: %w", err)
+	}
+	log.Info().Str("smtp_host", n.config.EmailSMTPHost).Str("to", n.config.EmailTo).Msg("Real-time alert sent via email")
+	return nil
 }
 
 // ReportPayload represents the typed request payload sent to reporter
@@ -145,6 +376,7 @@ type Scheduler struct {
 	cancelFunc              context.CancelFunc
 	startTime               time.Time
 	reporter                *ReporterClient
+	notification            *NotificationClient
 	metrics                 *metrics.Metrics
 }
 
@@ -155,6 +387,7 @@ func NewScheduler(db *sql.DB, cfg SchedulerConfig, m *metrics.Metrics) *Schedule
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	reporter := NewReporterClient(cfg.ReporterURL, ctx)
+	notification := NewNotificationClient(cfg, ctx)
 	return &Scheduler{
 		db:         db,
 		config:     cfg,
@@ -162,6 +395,7 @@ func NewScheduler(db *sql.DB, cfg SchedulerConfig, m *metrics.Metrics) *Schedule
 		cancelFunc: cancel,
 		startTime:  time.Now(),
 		reporter:   reporter,
+		notification: notification,
 		metrics:    m,
 	}
 }
@@ -505,6 +739,11 @@ func (s *Scheduler) checkHighSeverityIncidents() error {
 			Int("count", count).
 			Str("threshold", s.config.HighSeverityThreshold).
 			Msg("Found eligible high severity incidents - triggering alert")
+
+		// Phase 1: Send real-time alert via configured notification channel(s)
+		// (Discord, Telegram, or email) before dispatching the report request.
+		s.notification.SendAlertAsync([]string{}, "high_severity_incident_detected")
+
 		_, err := s.CreateHighSeverityReportRequest(s.ctx, []string{}, true)
 		if err != nil {
 			return err
@@ -653,6 +892,8 @@ func (s *Scheduler) Stop() {
 	// cancelled above, so these abort promptly rather than waiting out the full
 	// client timeout.
 	s.reporter.Close()
+	// Drain any in-flight async alert sends.
+	s.notification.Close()
 }
 
 // MuLock locks the scheduler mutex
