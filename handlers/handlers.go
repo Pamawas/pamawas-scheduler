@@ -176,7 +176,7 @@ func (h *Handler) CreateHighSeverityReportRequest(w http.ResponseWriter, r *http
 		return
 	}
 
-	resp, err := h.scheduler.CreateHighSeverityReportRequest(r.Context(), req.IncidentIDs, req.Evaluate)
+	resp, err := h.scheduler.CreateHighSeverityReportRequest(r.Context(), req.IncidentIDs, req.Evaluate, true)
 	if err != nil {
 		log.Error().Err(err).Msg("Failed to create high severity report request")
 		http.Error(w, fmt.Sprintf("Failed to create high severity report request: %v", err), http.StatusInternalServerError)

@@ -129,9 +129,9 @@ func TestReporterClientSendAsyncDoesNotBlock(t *testing.T) {
 
 func TestCheckHighSeverityIncidentsNoMatches(t *testing.T) {
 	s, mock := newMockScheduler(t, SchedulerConfig{HighSeverityThreshold: "HIGH"})
-	mock.ExpectQuery("SELECT COUNT").
+	mock.ExpectQuery("SELECT id FROM incidents").
 		WithArgs(4).
-		WillReturnRows(sqlmock.NewRows([]string{"count"}).AddRow(0))
+		WillReturnRows(sqlmock.NewRows([]string{"id"}))
 	if err := s.checkHighSeverityIncidents(); err != nil {
 		t.Fatal(err)
 	}
@@ -157,28 +157,31 @@ func TestSeverityRank(t *testing.T) {
 	}
 }
 
+// TestCheckHighSeverityIncidentsTriggersAlert verifies that checkHighSeverityIncidents
+// sends a real-time alert (via NotificationClient) and creates pending report requests
+// (without dispatching to the reporter) for eligible high-severity incidents.
 func TestCheckHighSeverityIncidentsTriggersAlert(t *testing.T) {
-	var received bool
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { received = true; w.WriteHeader(http.StatusOK) }))
-	defer server.Close()
-	s, mock := newMockScheduler(t, SchedulerConfig{ReporterURL: server.URL, HighSeverityThreshold: "critical"})
+	s, mock := newMockScheduler(t, SchedulerConfig{HighSeverityThreshold: "critical"})
 
-	// Mock the initial COUNT query with the critical severity rank.
-	mock.ExpectQuery("SELECT COUNT").
-		WithArgs(5).
-		WillReturnRows(sqlmock.NewRows([]string{"count"}).AddRow(2))
-
-	// Mock getEligibleHighSeverityIncidents query (called from CreateHighSeverityReportRequest)
+	// checkHighSeverityIncidents calls getEligibleHighSeverityIncidents directly.
 	mock.ExpectQuery("SELECT id FROM incidents").
 		WithArgs(5).
-		WillReturnRows(sqlmock.NewRows([]string{"id"}).AddRow("inc_01TEST111111111111111111111111").AddRow("inc_01TEST222222222222222222222222"))
+		WillReturnRows(sqlmock.NewRows([]string{"id"}).
+			AddRow("inc_01TEST111111111111111111111111").
+			AddRow("inc_01TEST222222222222222222222222"))
 
-	// Mock insert for first incident
+	// CreateHighSeverityReportRequest (evaluate=true) calls it again to filter eligible incidents.
+	mock.ExpectQuery("SELECT id FROM incidents").
+		WithArgs(5).
+		WillReturnRows(sqlmock.NewRows([]string{"id"}).
+			AddRow("inc_01TEST111111111111111111111111").
+			AddRow("inc_01TEST222222222222222222222222"))
+
+	// CreateHighSeverityReportRequest inserts one report request per incident (dispatch=false).
 	mock.ExpectQuery("INSERT INTO report_requests").
 		WithArgs(sqlmock.AnyArg(), "high_severity", sqlmock.AnyArg(), sqlmock.AnyArg(), "UTC", sqlmock.AnyArg()).
 		WillReturnRows(sqlmock.NewRows([]string{"id", "inserted"}).AddRow("rreq_01TEST987654321098765432109876", true))
 
-	// Mock insert for second incident
 	mock.ExpectQuery("INSERT INTO report_requests").
 		WithArgs(sqlmock.AnyArg(), "high_severity", sqlmock.AnyArg(), sqlmock.AnyArg(), "UTC", sqlmock.AnyArg()).
 		WillReturnRows(sqlmock.NewRows([]string{"id", "inserted"}).AddRow("rreq_01TEST987654321098765432109877", true))
@@ -186,12 +189,102 @@ func TestCheckHighSeverityIncidentsTriggersAlert(t *testing.T) {
 	if err := s.checkHighSeverityIncidents(); err != nil {
 		t.Fatal(err)
 	}
-	// The request to the reporter is dispatched asynchronously; wait for the
-	// in-flight send to complete before asserting it reached the server.
-	s.reporter.Close()
-	if !received {
-		t.Fatal("alert was not sent")
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
+// TestCheckHighSeverityFollowUpDispatchesOnTerminal verifies that checkHighSeverityFollowUp
+// dispatches a pending high-severity report request once an investigation run reaches a
+// terminal state.
+func TestCheckHighSeverityFollowUpDispatchesOnTerminal(t *testing.T) {
+	requestReceived := make(chan ReportPayload, 1)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/v1/reports" {
+			t.Errorf("unexpected reporter path: %s", r.URL.Path)
+		}
+		var payload ReportPayload
+		if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+			t.Errorf("failed to decode reporter payload: %v", err)
+			return
+		}
+		requestReceived <- payload
+		w.WriteHeader(http.StatusAccepted)
+	}))
+	defer server.Close()
+
+	s, mock := newMockScheduler(t, SchedulerConfig{
+		ReporterURL:             server.URL,
+		EnableHighSeverityAlert: true,
+		HighSeverityThreshold:   "high",
+	})
+	defer s.reporter.Close()
+
+	// Pending high-severity report request with incident ID in idempotency hash suffix.
+	baseHash := "hash_" + generateULID("hsh")
+	idempotencyHash := baseHash + "|inc_01TEST111111111111111111111111"
+
+	mock.ExpectQuery("SELECT rr.id, rr.idempotency_hash FROM report_requests rr").
+		WillReturnRows(sqlmock.NewRows([]string{"id", "idempotency_hash"}).
+			AddRow("rreq_01TEST123456789012345678901234", idempotencyHash))
+
+	// Investigation run in terminal state.
+	mock.ExpectQuery("SELECT COUNT\\(\\*\\) FROM investigation_runs").
+		WithArgs("inc_01TEST111111111111111111111111").
+		WillReturnRows(sqlmock.NewRows([]string{"count"}).AddRow(1))
+
+	if err := s.checkHighSeverityFollowUp(); err != nil {
+		t.Fatal(err)
 	}
+	require.NoError(t, mock.ExpectationsWereMet())
+
+	s.reporter.Close()
+	select {
+	case payload := <-requestReceived:
+		require.Equal(t, "rreq_01TEST123456789012345678901234", payload.RequestID)
+		require.Equal(t, []string{"inc_01TEST111111111111111111111111"}, payload.IncidentIDs)
+		require.Equal(t, "high_severity", payload.ReportType)
+	case <-time.After(time.Second):
+		t.Fatal("follow-up did not dispatch report request after terminal investigation")
+	}
+}
+
+// TestCheckHighSeverityFollowUpSkipsNonTerminal verifies that checkHighSeverityFollowUp
+// leaves a pending request alone when no investigation run has reached a terminal state.
+func TestCheckHighSeverityFollowUpSkipsNonTerminal(t *testing.T) {
+	s, mock := newMockScheduler(t, SchedulerConfig{
+		EnableHighSeverityAlert: true,
+		HighSeverityThreshold:   "high",
+	})
+
+	idempotencyHash := "hash_" + generateULID("hsh") + "|inc_01TEST111111111111111111111111"
+
+	mock.ExpectQuery("SELECT rr.id, rr.idempotency_hash FROM report_requests rr").
+		WillReturnRows(sqlmock.NewRows([]string{"id", "idempotency_hash"}).
+			AddRow("rreq_01TEST123456789012345678901234", idempotencyHash))
+
+	// No terminal investigation runs.
+	mock.ExpectQuery("SELECT COUNT\\(\\*\\) FROM investigation_runs").
+		WithArgs("inc_01TEST111111111111111111111111").
+		WillReturnRows(sqlmock.NewRows([]string{"count"}).AddRow(0))
+
+	if err := s.checkHighSeverityFollowUp(); err != nil {
+		t.Fatal(err)
+	}
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
+// TestCheckHighSeverityFollowUpSkipsWhenDisabled verifies that checkHighSeverityFollowUp
+// returns immediately when high-severity alerts are disabled.
+func TestCheckHighSeverityFollowUpSkipsWhenDisabled(t *testing.T) {
+	s, mock := newMockScheduler(t, SchedulerConfig{
+		EnableHighSeverityAlert: false,
+		HighSeverityThreshold:   "high",
+	})
+
+	// No DB queries expected when disabled.
+	if err := s.checkHighSeverityFollowUp(); err != nil {
+		t.Fatal(err)
+	}
+	require.NoError(t, mock.ExpectationsWereMet())
 }
 
 func TestCheckAndTriggerSkipsWhenRunning(t *testing.T) {
@@ -204,9 +297,11 @@ func TestCheckAndTriggerSkipsWhenRunning(t *testing.T) {
 
 func TestCheckAndTriggerRecordsHighSeverityCheck(t *testing.T) {
 	s, mock := newMockScheduler(t, SchedulerConfig{EnableHighSeverityAlert: true, HighSeverityThreshold: "high"})
-	mock.ExpectQuery("SELECT COUNT").
+	mock.ExpectQuery("SELECT id FROM incidents").
 		WithArgs(4).
-		WillReturnRows(sqlmock.NewRows([]string{"count"}).AddRow(0))
+		WillReturnRows(sqlmock.NewRows([]string{"id"}))
+	mock.ExpectQuery("SELECT rr.id, rr.idempotency_hash FROM report_requests rr").
+		WillReturnRows(sqlmock.NewRows([]string{"id", "idempotency_hash"}))
 	if err := s.checkAndTrigger(); err != nil {
 		t.Fatal(err)
 	}
@@ -216,6 +311,7 @@ func TestCheckAndTriggerRecordsHighSeverityCheck(t *testing.T) {
 	if s.Running() {
 		t.Fatal("scheduler left running")
 	}
+	require.NoError(t, mock.ExpectationsWereMet())
 }
 
 func TestStopCancelsReporterContext(t *testing.T) {
@@ -288,7 +384,7 @@ func TestCreateHighSeverityReportRequest_NoEligible(t *testing.T) {
 		WithArgs(4).
 		WillReturnRows(sqlmock.NewRows([]string{"id"}))
 
-	resp, err := s.CreateHighSeverityReportRequest(context.Background(), []string{}, true)
+	resp, err := s.CreateHighSeverityReportRequest(context.Background(), []string{}, true, false)
 	require.NoError(t, err)
 	require.Equal(t, 0, resp.EligibleCount)
 	require.Equal(t, "no_eligible_incidents", resp.Status)
@@ -308,7 +404,7 @@ func TestCreateHighSeverityReportRequest_WithExplicitIncidents(t *testing.T) {
 		WithArgs(sqlmock.AnyArg(), "high_severity", sqlmock.AnyArg(), sqlmock.AnyArg(), "UTC", sqlmock.AnyArg()).
 		WillReturnRows(sqlmock.NewRows([]string{"id", "inserted"}).AddRow("rreq_01TEST987654321098765432109876", true))
 
-	resp, err := s.CreateHighSeverityReportRequest(context.Background(), []string{"inc_01TEST123456789012345678901234"}, false)
+	resp, err := s.CreateHighSeverityReportRequest(context.Background(), []string{"inc_01TEST123456789012345678901234"}, false, false)
 	require.NoError(t, err)
 	require.Equal(t, 1, resp.EligibleCount)
 	require.Contains(t, resp.IncidentIDs, "inc_01TEST123456789012345678901234")
@@ -332,7 +428,7 @@ func TestCreateHighSeverityReportRequest_DuplicatePerIncident(t *testing.T) {
 		WithArgs("rreq_01TEST987654321098765432109876").
 		WillReturnRows(sqlmock.NewRows([]string{"id"}))
 
-	resp, err := s.CreateHighSeverityReportRequest(context.Background(), []string{"inc_01TEST123456789012345678901234"}, false)
+	resp, err := s.CreateHighSeverityReportRequest(context.Background(), []string{"inc_01TEST123456789012345678901234"}, false, false)
 	require.NoError(t, err)
 	require.True(t, resp.Duplicate)
 	require.Equal(t, "exists", resp.Status)
@@ -367,7 +463,7 @@ func TestCreateHighSeverityReportRequest_RequeuesStaleRequest(t *testing.T) {
 		WithArgs("rreq_01TEST987654321098765432109876").
 		WillReturnRows(sqlmock.NewRows([]string{"id"}).AddRow("rreq_01TEST987654321098765432109876"))
 
-	resp, err := s.CreateHighSeverityReportRequest(context.Background(), []string{"inc_01TEST123456789012345678901234"}, false)
+	resp, err := s.CreateHighSeverityReportRequest(context.Background(), []string{"inc_01TEST123456789012345678901234"}, false, true)
 	require.NoError(t, err)
 	require.False(t, resp.Duplicate)
 	require.Equal(t, "pending", resp.Status)
@@ -528,6 +624,7 @@ func TestShouldFireDaily(t *testing.T) {
 }
 
 func TestDailyReportBackoffAndRetry(t *testing.T) {
+
 	// Reference start of day (first allowed attempt) at 07:00 UTC
 	base := time.Date(2026, 8, 16, 7, 0, 0, 0, time.UTC)
 

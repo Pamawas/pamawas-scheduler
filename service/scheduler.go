@@ -451,6 +451,12 @@ func (s *Scheduler) checkAndTrigger() error {
 		log.Error().Err(err).Msg("Failed to check high severity incidents")
 	}
 
+	// Phase 2: Dispatch pending high-severity report requests whose investigations
+	// have reached a terminal state. Runs every tick alongside checkAndTriggerHighSeverity.
+	if err := s.checkHighSeverityFollowUp(); err != nil {
+		log.Error().Err(err).Msg("Failed to check high-severity follow-up")
+	}
+
 	return nil
 }
 
@@ -520,7 +526,7 @@ func (s *Scheduler) CreateDailyReportRequest(ctx context.Context, reportDate, ti
 }
 
 // CreateHighSeverityReportRequest creates a high-severity report request
-func (s *Scheduler) CreateHighSeverityReportRequest(ctx context.Context, incidentIDs []string, evaluate bool) (models.ReportRequestResponse, error) {
+func (s *Scheduler) CreateHighSeverityReportRequest(ctx context.Context, incidentIDs []string, evaluate bool, dispatch bool) (models.ReportRequestResponse, error) {
 	var resp models.ReportRequestResponse
 
 	var eligibleIncidentIDs []string
@@ -588,7 +594,7 @@ func (s *Scheduler) CreateHighSeverityReportRequest(ctx context.Context, inciden
 			duplicate = isDup
 		}
 
-		if !isDup {
+		if !isDup && dispatch {
 			// Send to reporter for each new request. Dispatched asynchronously:
 			// the report_requests row is already committed above, so a slow or
 			// unreachable reporter must not block the scheduler tick loop (which
@@ -699,56 +705,120 @@ func severityRank(severity string) int {
 
 // checkHighSeverityIncidents checks for high severity incidents that need immediate attention
 func (s *Scheduler) checkHighSeverityIncidents() error {
-	thresholdRank := severityRank(s.config.HighSeverityThreshold)
-
-	query := `
-		SELECT COUNT(*)
-		FROM incidents
-		WHERE status IN ('open', 'investigating')
-		AND (CASE LOWER(severity)
-			WHEN 'debug' THEN 1
-			WHEN 'info' THEN 2
-			WHEN 'warning' THEN 3
-			WHEN 'high' THEN 4
-			WHEN 'critical' THEN 5
-			ELSE 0
-		END) >= $1
-		AND status <> 'suppressed'
-		AND NOT EXISTS (
-			SELECT 1 FROM report_requests rr
-			WHERE rr.request_type = 'high_severity'
-			AND rr.idempotency_hash LIKE '%' || incidents.id || '%'
-			AND (
-				rr.status = 'generated'
-				OR (rr.status = 'pending' AND rr.updated_at >= now() - interval '10 minutes')
-				OR (rr.status = 'generating' AND rr.lease_expires_at >= now())
-				OR (rr.status = 'failed_retryable' AND rr.next_attempt_at > now())
-				OR EXISTS (SELECT 1 FROM reports r WHERE r.request_id = rr.id)
-			)
-		)
-	`
-
-	var count int
-	err := s.db.QueryRowContext(s.ctx, query, thresholdRank).Scan(&count)
+	eligible, err := s.getEligibleHighSeverityIncidents(s.ctx)
 	if err != nil {
 		return err
 	}
 
-	if count > 0 {
+	if len(eligible) > 0 {
 		log.Info().
-			Int("count", count).
+			Int("count", len(eligible)).
 			Str("threshold", s.config.HighSeverityThreshold).
 			Msg("Found eligible high severity incidents - triggering alert")
 
 		// Phase 1: Send real-time alert via configured notification channel(s)
-		// (Discord, Telegram, or email) before dispatching the report request.
-		s.notification.SendAlertAsync([]string{}, "high_severity_incident_detected")
+		// (Discord, Telegram, or email) with the actual incident IDs.
+		s.notification.SendAlertAsync(eligible, "high_severity_incident_detected")
 
-		_, err := s.CreateHighSeverityReportRequest(s.ctx, []string{}, true)
+		// Create report requests (pending) without dispatching to the reporter.
+		// The follow-up check (checkHighSeverityFollowUp) dispatches to the reporter
+		// once investigations reach a terminal state, so the scheduler never blocks
+		// waiting for investigation completion.
+		_, err := s.CreateHighSeverityReportRequest(s.ctx, eligible, true, false)
 		if err != nil {
 			return err
 		}
 		s.metrics.HighSeverityAlertsTotal.Inc()
+	}
+
+	return nil
+}
+
+// checkHighSeverityFollowUp checks pending high-severity report requests whose
+// investigations have reached a terminal state and dispatches them to the
+// reporter. This replaces the reporter's blocking wait/timeout with a
+// scheduler-driven, non-blocking check that runs on each tick.
+func (s *Scheduler) checkHighSeverityFollowUp() error {
+	if !s.config.EnableHighSeverityAlert {
+		return nil
+	}
+
+	query := `
+		SELECT rr.id, rr.idempotency_hash
+		FROM report_requests rr
+		WHERE rr.request_type = 'high_severity'
+		  AND rr.status = 'pending'
+		  AND NOT EXISTS (SELECT 1 FROM reports r WHERE r.request_id = rr.id)
+	`
+
+	rows, err := s.db.QueryContext(s.ctx, query)
+	if err != nil {
+		return err
+	}
+	defer func() {
+		if closeErr := rows.Close(); closeErr != nil {
+			log.Error().Err(closeErr).Msg("Failed to close rows")
+		}
+	}()
+
+	type pendingRequest struct {
+		requestID       string
+		idempotencyHash string
+	}
+	var pending []pendingRequest
+	for rows.Next() {
+		var id, hash string
+		if err := rows.Scan(&id, &hash); err != nil {
+			return err
+		}
+		pending = append(pending, pendingRequest{requestID: id, idempotencyHash: hash})
+	}
+	if err := rows.Err(); err != nil {
+		return err
+	}
+
+	for _, req := range pending {
+		// Extract incident ID from the idempotency hash suffix ("baseHash|incidentID")
+		incidentID := ""
+		if idx := strings.LastIndex(req.idempotencyHash, "|"); idx >= 0 && idx+1 < len(req.idempotencyHash) {
+			incidentID = req.idempotencyHash[idx+1:]
+		}
+		if incidentID == "" {
+			log.Warn().Str("request_id", req.requestID).Msg("Cannot extract incident ID from idempotency hash; skipping follow-up")
+			continue
+		}
+
+		// Check whether any investigation run for this incident has reached a
+		// terminal state (completed, failed, or failed_terminal).
+		var terminalCount int
+		err := s.db.QueryRowContext(s.ctx, `
+			SELECT COUNT(*) FROM investigation_runs
+			WHERE incident_id = $1
+			  AND status IN ('completed', 'failed', 'failed_terminal')
+		`, incidentID).Scan(&terminalCount)
+		if err != nil {
+			log.Error().Err(err).Str("incident_id", incidentID).Msg("Failed to check investigation status during follow-up")
+			continue
+		}
+
+		if terminalCount == 0 {
+			// Investigation not yet complete; leave the request pending for the next tick.
+			continue
+		}
+
+		// Investigation is terminal — dispatch the report request to the reporter.
+		boundaries := ComputeHighSeverityPeriod()
+		payload := ReportPayload{
+			ContractVersion: 1,
+			RequestID:       req.requestID,
+			ReportType:      "high_severity",
+			PeriodStart:     boundaries.PeriodStart.Format(time.RFC3339),
+			PeriodEnd:       boundaries.PeriodEnd.Format(time.RFC3339),
+			Timezone:        "UTC",
+			IncidentIDs:     []string{incidentID},
+		}
+		s.reporter.SendReportRequestAsync(payload)
+		log.Info().Str("request_id", req.requestID).Str("incident_id", incidentID).Msg("Dispatched high-severity report request after investigation completion")
 	}
 
 	return nil
