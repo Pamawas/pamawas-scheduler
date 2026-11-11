@@ -714,17 +714,13 @@ func (s *Scheduler) checkHighSeverityIncidents() error {
 		log.Info().
 			Int("count", len(eligible)).
 			Str("threshold", s.config.HighSeverityThreshold).
-			Msg("Found eligible high severity incidents - triggering alert")
+			Msg("Found eligible high severity incidents - dispatching report request to reporter")
 
-		// Phase 1: Send real-time alert via configured notification channel(s)
-		// (Discord, Telegram, or email) with the actual incident IDs.
-		s.notification.SendAlertAsync(eligible, "high_severity_incident_detected")
-
-		// Create report requests (pending) without dispatching to the reporter.
-		// The follow-up check (checkHighSeverityFollowUp) dispatches to the reporter
-		// once investigations reach a terminal state, so the scheduler never blocks
-		// waiting for investigation completion.
-		_, err := s.CreateHighSeverityReportRequest(s.ctx, eligible, true, false)
+		// Route high-severity alerts through the reporter (which has Discord/Telegram/email
+		// configured) rather than sending directly from the scheduler. Dispatch immediately
+		// so the reporter picks up the report request on this tick; the scheduler never
+		// blocks waiting for investigation completion.
+		_, err := s.CreateHighSeverityReportRequest(s.ctx, eligible, true, true)
 		if err != nil {
 			return err
 		}
