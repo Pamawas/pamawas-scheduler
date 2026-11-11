@@ -166,10 +166,10 @@ func (n *NotificationClient) buildAlertContent(incidentIDs []string, alertType s
 	}
 
 	var sb strings.Builder
-	sb.WriteString("🚨 *Pamawas High-Severity Alert*\n")
-	sb.WriteString(fmt.Sprintf("Type: %s\n", alertType))
-	sb.WriteString(fmt.Sprintf("Incidents: %s\n", strings.Join(incidentIDs, ", ")))
-	sb.WriteString(fmt.Sprintf("Time: %s\n", time.Now().UTC().Format(time.RFC3339)))
+	fmt.Fprintf(&sb, "🚨 *Pamawas High-Severity Alert*\n")
+	fmt.Fprintf(&sb, "Type: %s\n", alertType)
+	fmt.Fprintf(&sb, "Incidents: %s\n", strings.Join(incidentIDs, ", "))
+	fmt.Fprintf(&sb, "Time: %s\n", time.Now().UTC().Format(time.RFC3339))
 	sb.WriteString("Investigation will follow up with findings once complete.")
 	return sb.String()
 }
