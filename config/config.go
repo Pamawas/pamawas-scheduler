@@ -20,7 +20,7 @@ type Config struct {
 	EnableHighSeverityAlert bool
 	Mode                    string
 	DefaultTimezone         string
-	// Notification channel fields for Phase 1 real-time high-severity alerts.
+	// Notification channel fields for real-time high-severity alerts.
 	DiscordWebhookURL  string
 	TelegramBotToken   string
 	TelegramChatID     string

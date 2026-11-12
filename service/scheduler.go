@@ -19,15 +19,9 @@ import (
 	"github.com/Pamawas/pamawas-scheduler/models"
 )
 
-// Daily report retry backoff.
-//
-// The first attempt fires as soon as the trigger window opens (at 07:00, or
-// immediately on boot if the pod starts after that). If it fails (reporter down,
-// DB error, etc.) we retry instead of hammering the reporter on every check
-// tick. Retries are spaced dailyReportFastBackoff apart for the first
-// dailyReportFastWindow after the first attempt of the day, then every
-// dailyReportSlowBackoff thereafter. Success is still gated to at most once per
-// calendar day by lastDailyReport.
+// Daily report retry backoff. Retries are spaced dailyReportFastBackoff apart for the first
+// dailyReportFastWindow after the first attempt of the day, then every dailyReportSlowBackoff thereafter.
+// Success is gated to at most once per calendar day by lastDailyReport.
 const (
 	dailyReportFastBackoff = 10 * time.Minute
 	dailyReportSlowBackoff = time.Hour
@@ -44,7 +38,7 @@ type SchedulerConfig struct {
 	EnableDailyReport       bool
 	EnableHighSeverityAlert bool
 	DefaultTimezone         string
-	// Notification channel fields for Phase 1 real-time high-severity alerts.
+	// Notification channel fields for real-time high-severity alerts.
 	DiscordWebhookURL  string
 	TelegramBotToken   string
 	TelegramChatID     string
@@ -113,8 +107,7 @@ func (n *NotificationClient) EnabledChannels() []NotificationChannel {
 	return enabled
 }
 
-// SendAlertAsync dispatches an immediate high-severity alert via all configured channels.
-// It is fire-and-forget so the scheduler tick loop is never blocked.
+// SendAlertAsync dispatches an immediate high-severity alert via all configured channels. It is fire-and-forget so the scheduler tick loop is never blocked.
 func (n *NotificationClient) SendAlertAsync(incidentIDs []string, alertType string) {
 	if len(n.EnabledChannels()) == 0 {
 		log.Debug().Msg("No notification channels configured; skipping real-time alert")
@@ -154,7 +147,7 @@ func (n *NotificationClient) SendAlertAsync(incidentIDs []string, alertType stri
 	}()
 }
 
-// Close waits for any in-flight async alert sends to complete
+// Close waits for any in-flight async alert sends to complete.
 func (n *NotificationClient) Close() {
 	n.wg.Wait()
 }
@@ -331,13 +324,7 @@ func (c *ReporterClient) SendReportRequest(payload ReportPayload) error {
 	return nil
 }
 
-// SendReportRequestAsync dispatches the report request to the reporter without
-// blocking the caller. It is safe to fire-and-forget here because the caller has
-// already committed the report_requests row (idempotency hash) before invoking
-// this method, so a slow or unreachable reporter cannot stall the scheduler tick
-// loop nor cause a duplicate report. A panic in the send is recovered so the
-// scheduler worker is never torn down by a misbehaving reporter. In-flight sends
-// are drained by Close; the caller should cancel the client context first.
+// SendReportRequestAsync dispatches the report request to the reporter without blocking the caller.
 func (c *ReporterClient) SendReportRequestAsync(payload ReportPayload) {
 	c.wg.Add(1)
 	go func() {
@@ -452,16 +439,14 @@ func (s *Scheduler) checkAndTrigger() error {
 	}
 
 	// Phase 2: Dispatch pending high-severity report requests whose investigations
-	// have reached a terminal state. Runs every tick alongside checkAndTriggerHighSeverity.
+	// have reached a terminal state. Runs every tick.
 	if err := s.checkHighSeverityFollowUp(); err != nil {
 		log.Error().Err(err).Msg("Failed to check high-severity follow-up")
 	}
 
 	// Phase 3: Requeue stale report requests (generating with expired lease,
-	// failed_retryable past due, or pending older than 10 minutes) that have no
-	// associated report. This self-recovers stuck requests that no other tick
-	// path touches — the old single-request requeue only fired on idempotency
-	// conflicts, which never arrive for requests created long ago.
+	// failed_retryable past due, or pending older than 10 minutes) with no
+	// associated report. This self-recovers stuck requests.
 	if requeued, err := s.requeueStaleReportRequests(s.ctx); err != nil {
 		log.Error().Err(err).Msg("Failed to requeue stale report requests")
 	} else if requeued > 0 {
