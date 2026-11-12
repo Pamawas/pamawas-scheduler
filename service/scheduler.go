@@ -457,6 +457,17 @@ func (s *Scheduler) checkAndTrigger() error {
 		log.Error().Err(err).Msg("Failed to check high-severity follow-up")
 	}
 
+	// Phase 3: Requeue stale report requests (generating with expired lease,
+	// failed_retryable past due, or pending older than 10 minutes) that have no
+	// associated report. This self-recovers stuck requests that no other tick
+	// path touches — the old single-request requeue only fired on idempotency
+	// conflicts, which never arrive for requests created long ago.
+	if requeued, err := s.requeueStaleReportRequests(s.ctx); err != nil {
+		log.Error().Err(err).Msg("Failed to requeue stale report requests")
+	} else if requeued > 0 {
+		log.Info().Int("count", requeued).Msg("Requeued stale report requests this tick")
+	}
+
 	return nil
 }
 
@@ -650,6 +661,64 @@ func (s *Scheduler) insertReportRequest(ctx context.Context, requestType string,
 	return returnedID, !inserted, nil
 }
 
+// requeueStaleReportRequests finds all stale report requests (generating with
+// expired lease, failed_retryable past due, or pending older than 10 minutes)
+// that have no associated report and resets them to pending so the reporter can
+// pick them up on the next tick. This is a standalone sweep that runs every
+// scheduler tick so stuck requests self-recover without waiting for an
+// idempotency conflict that may never arrive.
+func (s *Scheduler) requeueStaleReportRequests(ctx context.Context) (int, error) {
+	const query = `
+		UPDATE report_requests
+		SET status = 'pending',
+		    next_attempt_at = NULL,
+		    lease_expires_at = NULL,
+		    safe_error_code = NULL,
+		    updated_at = now()
+		WHERE (
+		    (status = 'generating' AND (lease_expires_at IS NULL OR lease_expires_at < now()))
+		    OR (status = 'failed_retryable' AND (next_attempt_at IS NULL OR next_attempt_at <= now()))
+		    OR (status = 'pending' AND updated_at < now() - interval '10 minutes')
+		)
+		AND NOT EXISTS (
+		    SELECT 1 FROM reports r WHERE r.request_id = report_requests.id
+		)
+		RETURNING id
+	`
+
+	rows, err := s.db.QueryContext(ctx, query)
+	if err != nil {
+		return 0, err
+	}
+	defer func() {
+		if closeErr := rows.Close(); closeErr != nil {
+			log.Error().Err(closeErr).Msg("Failed to close rows during stale report request requeue")
+		}
+	}()
+
+	count := 0
+	var requeuedID string
+	for rows.Next() {
+		if err := rows.Scan(&requeuedID); err != nil {
+			return count, err
+		}
+		count++
+		log.Info().Str("request_id", requeuedID).Msg("Requeued stale report request")
+	}
+	if err := rows.Err(); err != nil {
+		return count, err
+	}
+
+	if count > 0 {
+		log.Info().Int("count", count).Msg("Requeued stale report requests")
+	}
+
+	return count, nil
+}
+
+// requeueStaleReportRequest resets a single stale report request back to pending
+// so the reporter can pick it up. It is called when an idempotency insert
+// collides with an existing request that appears abandoned.
 func (s *Scheduler) requeueStaleReportRequest(ctx context.Context, requestID string) (bool, error) {
 	const query = `
 		UPDATE report_requests
