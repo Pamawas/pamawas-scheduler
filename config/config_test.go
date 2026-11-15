@@ -81,6 +81,7 @@ func TestValidate(t *testing.T) {
 		Port:                  "8080",
 		CheckInterval:         time.Second,
 		ReporterURL:           "http://reporter",
+		ServiceToken:          "token",
 		DailyReportTime:       "07:00",
 		HighSeverityThreshold: "high",
 		DefaultTimezone:       "Asia/Jakarta",
@@ -96,6 +97,7 @@ func TestValidate(t *testing.T) {
 		want string
 	}{
 		{"database", func() Config { c := base; c.DatabaseURL = ""; return c }(), "database_url"},
+		{"service_token", func() Config { c := base; c.ServiceToken = ""; return c }(), "service_token"},
 		{"port", func() Config { c := base; c.Port = ""; return c }(), "port"},
 		{"interval", func() Config { c := base; c.CheckInterval = 0; return c }(), "check_interval"},
 		{"reporter_url", func() Config { c := base; c.ReporterURL = ""; return c }(), "reporter_url"},
