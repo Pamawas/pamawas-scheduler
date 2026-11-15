@@ -164,8 +164,9 @@ func TestSeverityRank(t *testing.T) {
 }
 
 // TestCheckHighSeverityIncidentsTriggersAlert verifies that checkHighSeverityIncidents
-// sends a real-time alert (via NotificationClient) and creates pending report requests
-// (without dispatching to the reporter) for eligible high-severity incidents.
+// creates pending report requests (without dispatching to the reporter) for
+// eligible high-severity incidents. The reporter owns the delivery channels
+// (immediate alerts come event-driven from ingest).
 func TestCheckHighSeverityIncidentsTriggersAlert(t *testing.T) {
 	s, mock := newMockScheduler(t, SchedulerConfig{HighSeverityThreshold: "critical"})
 
