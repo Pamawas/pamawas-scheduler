@@ -735,6 +735,20 @@ func (s *Scheduler) checkHighSeverityFollowUp() error {
 	return nil
 }
 
+// reportEligibleStatusFilter selects incidents that can still receive a
+// high-severity follow-up report.
+//
+// A resolved incident is included, because resolution frequently beats the
+// report request to the scheduler: an incident that fires and clears between
+// two ticks was never `open` when eligibility was evaluated, and used to be
+// dropped entirely — the investigator ran, its evidence was stored, and no
+// report was ever generated. Bounded by resolved_at so this only backfills the
+// recent gap and never resurrects old incidents.
+const reportEligibleStatusFilter = `(
+		status IN ('open', 'investigating')
+		OR (status = 'resolved' AND resolved_at >= now() - interval '1 hour')
+	)`
+
 // getEligibleHighSeverityIncidents returns incident IDs that are eligible for high-severity reports
 func (s *Scheduler) getEligibleHighSeverityIncidents(ctx context.Context) ([]string, error) {
 	thresholdRank := severityRank(s.config.HighSeverityThreshold)
@@ -742,7 +756,7 @@ func (s *Scheduler) getEligibleHighSeverityIncidents(ctx context.Context) ([]str
 	query := `
 		SELECT id
 		FROM incidents
-		WHERE status IN ('open', 'investigating')
+		WHERE ` + reportEligibleStatusFilter + `
 		AND (CASE LOWER(severity)
 			WHEN 'debug' THEN 1
 			WHEN 'info' THEN 2
@@ -800,7 +814,7 @@ func (s *Scheduler) filterEligibleIncidents(ctx context.Context, incidentIDs []s
 		SELECT id
 		FROM incidents
 		WHERE id = ANY($1)
-		AND status IN ('open', 'investigating')
+		AND ` + reportEligibleStatusFilter + `
 		AND (CASE LOWER(severity)
 			WHEN 'debug' THEN 1
 			WHEN 'info' THEN 2
