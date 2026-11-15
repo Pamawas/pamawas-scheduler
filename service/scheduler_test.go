@@ -6,6 +6,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -677,5 +678,46 @@ func TestDailyReportBackoffAndRetry(t *testing.T) {
 				t.Fatalf("allowed=%v, want %v (now=%v, lastAttempt=%v)", allowed, tt.wantAllowed, now, lastAttempt)
 			}
 		})
+	}
+}
+
+// TestResolvedIncidentStaysReportEligible is the regression test for reports
+// that were never generated for short incidents.
+//
+// Resolution frequently beats the report request to the scheduler: an incident
+// that fires and clears between two ticks was never `open` when eligibility was
+// evaluated, so it was dropped entirely — the investigator ran, its evidence was
+// stored, and no report ever reached the user. A recovered incident still needs
+// its investigation report.
+func TestResolvedIncidentStaysReportEligible(t *testing.T) {
+	s, mock := newMockScheduler(t, SchedulerConfig{HighSeverityThreshold: "critical"})
+
+	mock.ExpectQuery("SELECT id FROM incidents").
+		WithArgs(5).
+		WillReturnRows(sqlmock.NewRows([]string{"id"}).
+			AddRow("inc_01RESOLVED111111111111111111"))
+
+	eligible, err := s.getEligibleHighSeverityIncidents(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	require.Equal(t, []string{"inc_01RESOLVED111111111111111111"}, eligible)
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
+// TestReportEligibilityIncludesRecentlyResolved pins the predicate itself. It
+// must admit resolved incidents only for a bounded window, so a deploy does not
+// resurrect every historical incident.
+func TestReportEligibilityIncludesRecentlyResolved(t *testing.T) {
+	filter := reportEligibleStatusFilter
+
+	for _, want := range []string{
+		"status IN ('open', 'investigating')",
+		"status = 'resolved'",
+		"resolved_at >= now() - interval '1 hour'",
+	} {
+		if !strings.Contains(filter, want) {
+			t.Errorf("eligibility filter missing %q, got:\n%s", want, filter)
+		}
 	}
 }
