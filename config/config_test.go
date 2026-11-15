@@ -49,7 +49,7 @@ func TestLoadPanicsWithoutDatabaseURL(t *testing.T) {
 			return
 		}
 		msg, ok := got.(string)
-		if !ok || !strings.Contains(msg, "DATABASE_URL not set") {
+		if !ok || !strings.Contains(msg, "database_url is required") {
 			t.Fatalf("unexpected panic: %v", got)
 		}
 	}()
@@ -83,6 +83,8 @@ func TestValidate(t *testing.T) {
 		DailyReportTime:       "07:00",
 		HighSeverityThreshold: "high",
 		DefaultTimezone:       "Asia/Jakarta",
+		RateLimitRPS:          10,
+		RateLimitBurst:        20,
 	}
 	if err := base.Validate(); err != nil {
 		t.Fatal(err)

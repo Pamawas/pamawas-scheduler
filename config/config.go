@@ -32,6 +32,11 @@ type Config struct {
 	EmailPassword      string
 	EmailFrom          string
 	EmailTo            string
+
+	// Inbound HTTP rate limiting (design review P5). Applies per route;
+	// /healthz, /ready and /metrics are exempt.
+	RateLimitRPS   float64
+	RateLimitBurst int
 }
 
 func Load() Config {
@@ -113,6 +118,12 @@ func Load() Config {
 	if err := v.BindEnv("email_to", "EMAIL_TO", "PAMAWAS_SCHEDULER_EMAIL_TO"); err != nil {
 		panic(fmt.Sprintf("failed to bind EMAIL_TO env: %v", err))
 	}
+	if err := v.BindEnv("rate_limit_rps", "RATE_LIMIT_RPS"); err != nil {
+		panic(fmt.Sprintf("failed to bind RATE_LIMIT_RPS env: %v", err))
+	}
+	if err := v.BindEnv("rate_limit_burst", "RATE_LIMIT_BURST"); err != nil {
+		panic(fmt.Sprintf("failed to bind RATE_LIMIT_BURST env: %v", err))
+	}
 
 	// Defaults
 	v.SetDefault("port", "8080")
@@ -126,6 +137,8 @@ func Load() Config {
 	v.SetDefault("enable_high_severity_alert", true)
 	v.SetDefault("mode", "auto")
 	v.SetDefault("default_timezone", "Asia/Jakarta")
+	v.SetDefault("rate_limit_rps", 10)
+	v.SetDefault("rate_limit_burst", 20)
 
 	if err := v.ReadInConfig(); err != nil {
 		if _, ok := err.(viper.ConfigFileNotFoundError); !ok {
@@ -151,10 +164,12 @@ func Load() Config {
 		EnableHighSeverityAlert: v.GetBool("enable_high_severity_alert"),
 		Mode:                    v.GetString("mode"),
 		DefaultTimezone:         v.GetString("default_timezone"),
+		RateLimitRPS:            v.GetFloat64("rate_limit_rps"),
+		RateLimitBurst:          v.GetInt("rate_limit_burst"),
 	}
 
-	if cfg.DatabaseURL == "" {
-		panic("DATABASE_URL not set (config file or PAMAWAS_SCHEDULER_DATABASE_URL / DATABASE_URL env var)")
+	if err := cfg.Validate(); err != nil {
+		panic(fmt.Sprintf("invalid configuration: %v", err))
 	}
 	return cfg
 }
@@ -185,6 +200,12 @@ func (c Config) Validate() error {
 	}
 	if _, err := time.LoadLocation(c.DefaultTimezone); err != nil {
 		return fmt.Errorf("default_timezone %q is not a valid IANA zone: %w", c.DefaultTimezone, err)
+	}
+	if c.RateLimitRPS <= 0 {
+		return fmt.Errorf("rate_limit_rps must be positive, got %v", c.RateLimitRPS)
+	}
+	if c.RateLimitBurst < 1 {
+		return fmt.Errorf("rate_limit_burst must be >= 1, got %d", c.RateLimitBurst)
 	}
 	return nil
 }

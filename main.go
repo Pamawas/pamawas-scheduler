@@ -110,6 +110,11 @@ func main() {
 
 	// Wrap router with middleware
 	var handler http.Handler = r
+	handler = middleware.RateLimitMiddleware("pamawas-scheduler", map[string]middleware.RouteLimit{
+		"/api/v1/status":                        {RPS: cfg.RateLimitRPS, Burst: cfg.RateLimitBurst},
+		"/api/v1/report-requests/daily":         {RPS: cfg.RateLimitRPS, Burst: cfg.RateLimitBurst},
+		"/api/v1/report-requests/high-severity": {RPS: cfg.RateLimitRPS, Burst: cfg.RateLimitBurst},
+	}, handler)
 	handler = middleware.LoggingMiddleware("pamawas-scheduler", handler)
 	handler = middleware.ErrorLoggingMiddleware("pamawas-scheduler", handler)
 
