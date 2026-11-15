@@ -26,6 +26,7 @@ func inTempDir(t *testing.T) {
 func TestLoadDefaultsAndEnvironmentOverrides(t *testing.T) {
 	inTempDir(t)
 	t.Setenv("PAMAWAS_SCHEDULER_DATABASE_URL", "postgres://example/test")
+	t.Setenv("PAMAWAS_SERVICE_TOKEN", "test-service-token")
 	t.Setenv("PAMAWAS_SCHEDULER_PORT", "9090")
 	t.Setenv("PAMAWAS_SCHEDULER_CHECK_INTERVAL", "2m")
 	t.Setenv("PAMAWAS_SCHEDULER_ENABLE_DAILY_REPORT", "false")

@@ -14,6 +14,9 @@ type Config struct {
 	LogLevel                string
 	Environment             string
 	ReporterURL             string
+	// ServiceToken authenticates outbound calls to the reporter, which rejects
+	// unauthenticated callers on every /api/v1 route.
+	ServiceToken            string
 	DailyReportTime         string
 	HighSeverityThreshold   string
 	CheckInterval           time.Duration
@@ -49,6 +52,9 @@ func Load() Config {
 	}
 	if err := v.BindEnv("environment", "ENVIRONMENT", "PAMAWAS_SCHEDULER_ENVIRONMENT"); err != nil {
 		panic(fmt.Sprintf("failed to bind ENVIRONMENT env: %v", err))
+	}
+	if err := v.BindEnv("service_token", "PAMAWAS_SERVICE_TOKEN"); err != nil {
+		panic(fmt.Sprintf("failed to bind PAMAWAS_SERVICE_TOKEN env: %v", err))
 	}
 	if err := v.BindEnv("reporter_url", "REPORTER_URL", "PAMAWAS_SCHEDULER_REPORTER_URL"); err != nil {
 		panic(fmt.Sprintf("failed to bind REPORTER_URL env: %v", err))
@@ -116,6 +122,7 @@ func Load() Config {
 		LogLevel:                v.GetString("log_level"),
 		Environment:             v.GetString("environment"),
 		ReporterURL:             v.GetString("reporter_url"),
+		ServiceToken:            v.GetString("service_token"),
 		DailyReportTime:         v.GetString("daily_report_time"),
 		HighSeverityThreshold:   v.GetString("high_severity_threshold"),
 		CheckInterval:           checkInterval,
@@ -142,6 +149,9 @@ func (c Config) Validate() error {
 	}
 	if c.CheckInterval <= 0 {
 		return fmt.Errorf("check_interval must be positive")
+	}
+	if c.ServiceToken == "" {
+		return fmt.Errorf("service_token is required (set PAMAWAS_SERVICE_TOKEN): the reporter rejects unauthenticated callers")
 	}
 	if c.ReporterURL == "" {
 		return fmt.Errorf("reporter_url is required")

@@ -28,6 +28,7 @@ type Handler struct {
 func NewHandler(db *sql.DB, cfg config.Config, m *metrics.Metrics) *Handler {
 	schedulerCfg := service.SchedulerConfig{
 		ReporterURL:             cfg.ReporterURL,
+		ServiceToken:            cfg.ServiceToken,
 		DailyReportTime:         cfg.DailyReportTime,
 		HighSeverityThreshold:   cfg.HighSeverityThreshold,
 		CheckInterval:           cfg.CheckInterval,

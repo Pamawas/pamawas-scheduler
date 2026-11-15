@@ -31,6 +31,7 @@ const (
 // SchedulerConfig holds the configuration for the scheduler
 type SchedulerConfig struct {
 	ReporterURL             string
+	ServiceToken            string
 	DailyReportTime         string
 	HighSeverityThreshold   string
 	CheckInterval           time.Duration
@@ -41,17 +42,21 @@ type SchedulerConfig struct {
 
 // ReporterClient is a client for triggering reports via the reporter service
 type ReporterClient struct {
-	baseURL    string
-	httpClient *http.Client
-	ctx        context.Context
-	wg         sync.WaitGroup
+	baseURL string
+	// serviceToken authenticates to the reporter, which rejects unauthenticated
+	// callers on every /api/v1 route.
+	serviceToken string
+	httpClient   *http.Client
+	ctx          context.Context
+	wg           sync.WaitGroup
 }
 
-func NewReporterClient(baseURL string, ctx context.Context) *ReporterClient {
+func NewReporterClient(baseURL, serviceToken string, ctx context.Context) *ReporterClient {
 	return &ReporterClient{
-		baseURL:    baseURL,
-		httpClient: &http.Client{Timeout: reporterRequestTimeout},
-		ctx:        ctx,
+		baseURL:      baseURL,
+		serviceToken: serviceToken,
+		httpClient:   &http.Client{Timeout: reporterRequestTimeout},
+		ctx:          ctx,
 	}
 }
 
@@ -77,6 +82,9 @@ func (c *ReporterClient) SendReportRequest(payload ReportPayload) error {
 		return err
 	}
 	req.Header.Set("Content-Type", "application/json")
+	if c.serviceToken != "" {
+		req.Header.Set("X-Service-Token", c.serviceToken)
+	}
 
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
@@ -156,7 +164,7 @@ func NewScheduler(db *sql.DB, cfg SchedulerConfig, m *metrics.Metrics) *Schedule
 		panic(fmt.Sprintf("invalid default_timezone %q: %v", cfg.DefaultTimezone, err))
 	}
 	ctx, cancel := context.WithCancel(context.Background())
-	reporter := NewReporterClient(cfg.ReporterURL, ctx)
+	reporter := NewReporterClient(cfg.ReporterURL, cfg.ServiceToken, ctx)
 	return &Scheduler{
 		db:         db,
 		config:     cfg,

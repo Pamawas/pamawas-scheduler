@@ -85,7 +85,7 @@ func TestReporterClientTriggersRequests(t *testing.T) {
 		w.WriteHeader(http.StatusAccepted)
 	}))
 	defer server.Close()
-	client := NewReporterClient(server.URL, context.Background())
+	client := NewReporterClient(server.URL, "test-token", context.Background())
 	if err := client.SendReportRequest(ReportPayload{
 		ContractVersion: 1,
 		RequestID:       "rreq_test",
@@ -103,7 +103,7 @@ func TestReporterClientTriggersRequests(t *testing.T) {
 }
 
 func TestReporterClientReturnsHTTPError(t *testing.T) {
-	client := NewReporterClient("http://127.0.0.1:1", context.Background())
+	client := NewReporterClient("http://127.0.0.1:1", "test-token", context.Background())
 	if err := client.SendReportRequest(ReportPayload{}); err == nil {
 		t.Fatal("expected transport error")
 	}
@@ -120,7 +120,7 @@ func TestReporterClientSendAsyncDoesNotBlock(t *testing.T) {
 	}))
 	defer server.Close()
 
-	client := NewReporterClient(server.URL, context.Background())
+	client := NewReporterClient(server.URL, "test-token", context.Background())
 
 	// The held-open request would keep SendReportRequest blocking for the full
 	// client timeout; the async dispatch must return well before that.
