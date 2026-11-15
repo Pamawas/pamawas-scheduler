@@ -42,6 +42,12 @@ func newTestHandler(t *testing.T, cfg config.Config) (*Handler, sqlmock.Sqlmock)
 			t.Logf("failed to close db: %v", err)
 		}
 	})
+	// Handler tests build config.Config{} literals. NewScheduler requires a
+	// valid IANA timezone (there is no constructor fallback), so supply one
+	// unless the test set its own.
+	if cfg.DefaultTimezone == "" {
+		cfg.DefaultTimezone = "UTC"
+	}
 	return NewHandler(db, cfg, handlerMetrics()), mock
 }
 

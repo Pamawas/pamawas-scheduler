@@ -26,6 +26,7 @@ func schedulerMetrics() *metrics.Metrics {
 		LastHighSeverityCheck:   prometheus.NewGauge(prometheus.GaugeOpts{Name: "test_last_check"}),
 		SchedulerRunning:        prometheus.NewGauge(prometheus.GaugeOpts{Name: "test_running"}),
 		SchedulerUptime:         prometheus.NewGauge(prometheus.GaugeOpts{Name: "test_uptime"}),
+		SchedulerLeader:         prometheus.NewGauge(prometheus.GaugeOpts{Name: "test_leader"}),
 	}
 }
 
@@ -40,6 +41,11 @@ func newMockScheduler(t *testing.T, cfg SchedulerConfig) (*Scheduler, sqlmock.Sq
 			t.Logf("failed to close db: %v", err)
 		}
 	})
+	// Tests construct SchedulerConfig{} literals; NewScheduler requires a
+	// valid timezone, so supply one unless the test set its own.
+	if cfg.DefaultTimezone == "" {
+		cfg.DefaultTimezone = "UTC"
+	}
 	return NewScheduler(db, cfg, schedulerMetrics()), mock
 }
 

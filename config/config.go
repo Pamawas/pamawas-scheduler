@@ -2,6 +2,7 @@ package config
 
 import (
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/spf13/viper"
@@ -167,6 +168,23 @@ func (c Config) Validate() error {
 	}
 	if c.CheckInterval <= 0 {
 		return fmt.Errorf("check_interval must be positive")
+	}
+	if c.ReporterURL == "" {
+		return fmt.Errorf("reporter_url is required")
+	}
+	if _, err := time.Parse("15:04", c.DailyReportTime); err != nil {
+		return fmt.Errorf("daily_report_time must be HH:MM, got %q", c.DailyReportTime)
+	}
+	switch strings.ToLower(c.HighSeverityThreshold) {
+	case "debug", "info", "warning", "high", "critical":
+	default:
+		return fmt.Errorf("high_severity_threshold must be one of debug|info|warning|high|critical, got %q", c.HighSeverityThreshold)
+	}
+	if c.DefaultTimezone == "" {
+		return fmt.Errorf("default_timezone is required")
+	}
+	if _, err := time.LoadLocation(c.DefaultTimezone); err != nil {
+		return fmt.Errorf("default_timezone %q is not a valid IANA zone: %w", c.DefaultTimezone, err)
 	}
 	return nil
 }

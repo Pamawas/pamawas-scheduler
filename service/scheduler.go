@@ -365,39 +365,125 @@ type Scheduler struct {
 	reporter                *ReporterClient
 	notification            *NotificationClient
 	metrics                 *metrics.Metrics
+
+	// Leader election via a PostgreSQL session-level advisory lock. A
+	// dedicated connection holds the lock for the process lifetime; when it
+	// is not the leader the tick loop stays idle so periodic work (daily
+	// reports, high-severity sweeps, requeues) runs exactly once across
+	// replicas. If the leader dies, its connection drops, Postgres releases
+	// the lock, and a follower acquires it on its next retry.
+	leaderConn *sql.Conn
+	isLeader   bool
 }
 
-// NewScheduler creates a new scheduler instance
+// NewScheduler creates a new scheduler instance. The config must carry a
+// valid IANA default timezone — config.Load supplies the documented
+// development default (Asia/Jakarta); there is no constructor fallback.
 func NewScheduler(db *sql.DB, cfg SchedulerConfig, m *metrics.Metrics) *Scheduler {
 	if cfg.DefaultTimezone == "" {
-		cfg.DefaultTimezone = "Asia/Jakarta"
+		panic("default_timezone is required (config must supply it)")
+	}
+	if _, err := time.LoadLocation(cfg.DefaultTimezone); err != nil {
+		panic(fmt.Sprintf("invalid default_timezone %q: %v", cfg.DefaultTimezone, err))
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	reporter := NewReporterClient(cfg.ReporterURL, ctx)
 	notification := NewNotificationClient(cfg, ctx)
 	return &Scheduler{
-		db:         db,
-		config:     cfg,
-		ctx:        ctx,
-		cancelFunc: cancel,
-		startTime:  time.Now(),
-		reporter:   reporter,
+		db:           db,
+		config:       cfg,
+		ctx:          ctx,
+		cancelFunc:   cancel,
+		startTime:    time.Now(),
+		reporter:     reporter,
 		notification: notification,
-		metrics:    m,
+		metrics:      m,
 	}
 }
 
-// StartWorker starts the background scheduler worker
+// leaderLockID is the fixed advisory-lock key for scheduler leadership.
+const leaderLockID = 7270001 // "PAMAWAS" themed constant, must be stable across replicas
+
+// AcquireLeadership attempts to take the scheduler advisory lock on a
+// dedicated pooled connection. Returns true when this instance is the leader.
+// The connection must stay open for as long as leadership is held.
+func (s *Scheduler) AcquireLeadership() bool {
+	conn, err := s.db.Conn(s.ctx)
+	if err != nil {
+		log.Error().Err(err).Msg("Leader election: failed to obtain dedicated connection")
+		return false
+	}
+	var locked bool
+	if err := conn.QueryRowContext(s.ctx, "SELECT pg_try_advisory_lock($1)", leaderLockID).Scan(&locked); err != nil {
+		log.Error().Err(err).Msg("Leader election: advisory lock query failed")
+		_ = conn.Close()
+		return false
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if !locked {
+		_ = conn.Close()
+		s.isLeader = false
+		s.metrics.SchedulerLeader.Set(0)
+		return false
+	}
+	s.leaderConn = conn
+	s.isLeader = true
+	s.metrics.SchedulerLeader.Set(1)
+	log.Info().Msg("Leader election: acquired scheduler leadership")
+	return true
+}
+
+// ReleaseLeadership relinquishes the advisory lock and closes the dedicated
+// connection. Safe to call when not the leader.
+func (s *Scheduler) ReleaseLeadership() {
+	s.mu.Lock()
+	conn := s.leaderConn
+	s.leaderConn = nil
+	s.isLeader = false
+	s.mu.Unlock()
+	s.metrics.SchedulerLeader.Set(0)
+	if conn == nil {
+		return
+	}
+	_, err := conn.ExecContext(context.Background(), "SELECT pg_advisory_unlock($1)", leaderLockID)
+	if err != nil {
+		log.Error().Err(err).Msg("Leader election: advisory unlock failed (connection close will release it)")
+	}
+	_ = conn.Close()
+}
+
+// IsLeader reports whether this instance currently holds scheduler leadership.
+func (s *Scheduler) IsLeader() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.isLeader
+}
+
+// StartWorker starts the background scheduler worker. Only the leader runs
+// the tick loop; followers retry leadership every tick so a leader crash is
+// recovered without manual intervention.
 func (s *Scheduler) StartWorker() {
 	ticker := time.NewTicker(s.config.CheckInterval)
 	defer ticker.Stop()
 
+	if !s.AcquireLeadership() {
+		log.Info().Msg("Scheduler instance is a follower; tick loop idle until leadership frees up")
+	}
+
 	for {
 		select {
 		case <-s.ctx.Done():
+			s.ReleaseLeadership()
 			log.Info().Msg("Scheduler worker stopped")
 			return
 		case <-ticker.C:
+			if !s.IsLeader() {
+				// Leadership may have freed up (leader crashed/restarted).
+				if !s.AcquireLeadership() {
+					continue
+				}
+			}
 			if err := s.checkAndTrigger(); err != nil {
 				log.Error().Err(err).Msg("Scheduler check error")
 			}
@@ -1008,6 +1094,9 @@ func (s *Scheduler) checkAndTriggerHighSeverity(now time.Time) error {
 func (s *Scheduler) Stop() {
 	s.cancelFunc()
 	s.wg.Wait()
+	// Release scheduler leadership deterministically instead of relying on the
+	// connection close, so a follower can take over immediately.
+	s.ReleaseLeadership()
 	// Drain any in-flight async report sends. s.ctx (the reporter's context) was
 	// cancelled above, so these abort promptly rather than waiting out the full
 	// client timeout.

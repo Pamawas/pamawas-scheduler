@@ -45,7 +45,7 @@ func TestNewScheduler(t *testing.T) {
 			t.Logf("Failed to close database: %v", closeErr)
 		}
 	}()
-	s := service.NewScheduler(db, service.SchedulerConfig{}, nil)
+	s := service.NewScheduler(db, service.SchedulerConfig{DefaultTimezone: "UTC"}, nil)
 	if s == nil {
 		t.Error("NewScheduler returned nil")
 	}

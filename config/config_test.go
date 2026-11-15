@@ -75,7 +75,16 @@ func TestLoadPanicsForInvalidInterval(t *testing.T) {
 }
 
 func TestValidate(t *testing.T) {
-	if err := (Config{DatabaseURL: "db", Port: "8080", CheckInterval: time.Second}).Validate(); err != nil {
+	base := Config{
+		DatabaseURL:           "db",
+		Port:                  "8080",
+		CheckInterval:         time.Second,
+		ReporterURL:           "http://reporter",
+		DailyReportTime:       "07:00",
+		HighSeverityThreshold: "high",
+		DefaultTimezone:       "Asia/Jakarta",
+	}
+	if err := base.Validate(); err != nil {
 		t.Fatal(err)
 	}
 	cases := []struct {
@@ -83,9 +92,13 @@ func TestValidate(t *testing.T) {
 		cfg  Config
 		want string
 	}{
-		{"database", Config{Port: "8080", CheckInterval: time.Second}, "database_url"},
-		{"port", Config{DatabaseURL: "db", CheckInterval: time.Second}, "port"},
-		{"interval", Config{DatabaseURL: "db", Port: "8080"}, "check_interval"},
+		{"database", func() Config { c := base; c.DatabaseURL = ""; return c }(), "database_url"},
+		{"port", func() Config { c := base; c.Port = ""; return c }(), "port"},
+		{"interval", func() Config { c := base; c.CheckInterval = 0; return c }(), "check_interval"},
+		{"reporter_url", func() Config { c := base; c.ReporterURL = ""; return c }(), "reporter_url"},
+		{"daily_time", func() Config { c := base; c.DailyReportTime = "7am"; return c }(), "daily_report_time"},
+		{"threshold", func() Config { c := base; c.HighSeverityThreshold = "urgent"; return c }(), "high_severity_threshold"},
+		{"timezone", func() Config { c := base; c.DefaultTimezone = "Mars/Tharsis"; return c }(), "default_timezone"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
