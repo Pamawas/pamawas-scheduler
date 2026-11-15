@@ -416,13 +416,17 @@ func (s *Scheduler) AcquireLeadership() bool {
 	var locked bool
 	if err := conn.QueryRowContext(s.ctx, "SELECT pg_try_advisory_lock($1)", leaderLockID).Scan(&locked); err != nil {
 		log.Error().Err(err).Msg("Leader election: advisory lock query failed")
-		_ = conn.Close()
+		if cerr := conn.Close(); cerr != nil {
+			log.Error().Err(cerr).Msg("Leader election: failed to close dedicated connection after query error")
+		}
 		return false
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if !locked {
-		_ = conn.Close()
+		if cerr := conn.Close(); cerr != nil {
+			log.Error().Err(cerr).Msg("Leader election: failed to close dedicated connection (lock not acquired)")
+		}
 		s.isLeader = false
 		s.metrics.SchedulerLeader.Set(0)
 		return false
@@ -450,7 +454,9 @@ func (s *Scheduler) ReleaseLeadership() {
 	if err != nil {
 		log.Error().Err(err).Msg("Leader election: advisory unlock failed (connection close will release it)")
 	}
-	_ = conn.Close()
+	if cerr := conn.Close(); cerr != nil {
+		log.Error().Err(cerr).Msg("Leader election: failed to close dedicated connection on release")
+	}
 }
 
 // IsLeader reports whether this instance currently holds scheduler leadership.
