@@ -857,10 +857,12 @@ func (s *Scheduler) checkHighSeverityIncidents() error {
 			Msg("Found eligible high severity incidents - dispatching report request to reporter")
 
 		// Route high-severity alerts through the reporter (which has Discord/Telegram/email
-		// configured) rather than sending directly from the scheduler. Dispatch immediately
-		// so the reporter picks up the report request on this tick; the scheduler never
-		// blocks waiting for investigation completion.
-		_, err := s.CreateHighSeverityReportRequest(s.ctx, eligible, true, true)
+		// configured) rather than sending directly from the scheduler. Create the report
+		// request as pending WITHOUT dispatching it immediately: checkHighSeverityFollowUp
+		// dispatches it to the reporter only after the investigation reaches a terminal
+		// state, so the generated report includes the investigation's evidence instead of
+		// "investigation unavailable".
+		_, err := s.CreateHighSeverityReportRequest(s.ctx, eligible, true, false)
 		if err != nil {
 			return err
 		}
