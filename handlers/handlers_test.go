@@ -133,7 +133,7 @@ func TestCreateDailyReportRequest(t *testing.T) {
 	// Mock the scheduler's CreateDailyReportRequest by using the actual scheduler
 	// Since we're testing the handler, we need to mock the database for the scheduler
 	mock.ExpectQuery("INSERT INTO report_requests").
-		WithArgs(sqlmock.AnyArg(), "daily", sqlmock.AnyArg(), sqlmock.AnyArg(), "Asia/Jakarta", sqlmock.AnyArg()).
+		WithArgs(sqlmock.AnyArg(), "daily", sqlmock.AnyArg(), sqlmock.AnyArg(), "Asia/Jakarta", sqlmock.AnyArg(), "").
 		WillReturnRows(sqlmock.NewRows([]string{"id", "inserted"}).AddRow("rreq_01TEST123456789012345678901234", true))
 
 	body := `{"report_date":"2026-08-16","timezone":"Asia/Jakarta"}`
@@ -179,7 +179,7 @@ func TestCreateDailyReportRequest_Duplicate(t *testing.T) {
 	h, mock := newTestHandler(t, config.Config{ReporterURL: "http://reporter", DefaultTimezone: "Asia/Jakarta"})
 
 	mock.ExpectQuery("INSERT INTO report_requests").
-		WithArgs(sqlmock.AnyArg(), "daily", sqlmock.AnyArg(), sqlmock.AnyArg(), "Asia/Jakarta", sqlmock.AnyArg()).
+		WithArgs(sqlmock.AnyArg(), "daily", sqlmock.AnyArg(), sqlmock.AnyArg(), "Asia/Jakarta", sqlmock.AnyArg(), "").
 		WillReturnRows(sqlmock.NewRows([]string{"id", "inserted"}).AddRow("rreq_01TEST123456789012345678901234", false))
 
 	body := `{"report_date":"2026-08-16","timezone":"Asia/Jakarta"}`
@@ -203,7 +203,7 @@ func TestCreateHighSeverityReportRequest(t *testing.T) {
 
 	// Insert
 	mock.ExpectQuery("INSERT INTO report_requests").
-		WithArgs(sqlmock.AnyArg(), "high_severity", sqlmock.AnyArg(), sqlmock.AnyArg(), "UTC", sqlmock.AnyArg()).
+		WithArgs(sqlmock.AnyArg(), "high_severity", sqlmock.AnyArg(), sqlmock.AnyArg(), "UTC", sqlmock.AnyArg(), sqlmock.AnyArg()).
 		WillReturnRows(sqlmock.NewRows([]string{"id", "inserted"}).AddRow("rreq_01TEST987654321098765432109876", true))
 
 	body := `{"incident_ids":["inc_01TEST123456789012345678901234"],"evaluate":false}`
@@ -228,7 +228,7 @@ func TestCreateHighSeverityReportRequest_Evaluate(t *testing.T) {
 
 	// Insert for the eligible incident
 	mock.ExpectQuery("INSERT INTO report_requests").
-		WithArgs(sqlmock.AnyArg(), "high_severity", sqlmock.AnyArg(), sqlmock.AnyArg(), "UTC", sqlmock.AnyArg()).
+		WithArgs(sqlmock.AnyArg(), "high_severity", sqlmock.AnyArg(), sqlmock.AnyArg(), "UTC", sqlmock.AnyArg(), sqlmock.AnyArg()).
 		WillReturnRows(sqlmock.NewRows([]string{"id", "inserted"}).AddRow("rreq_01TEST987654321098765432109876", true))
 
 	body := `{"evaluate":true}`

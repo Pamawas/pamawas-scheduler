@@ -187,11 +187,11 @@ func TestCheckHighSeverityIncidentsTriggersAlert(t *testing.T) {
 
 	// CreateHighSeverityReportRequest inserts one report request per incident (dispatch=false).
 	mock.ExpectQuery("INSERT INTO report_requests").
-		WithArgs(sqlmock.AnyArg(), "high_severity", sqlmock.AnyArg(), sqlmock.AnyArg(), "UTC", sqlmock.AnyArg()).
+		WithArgs(sqlmock.AnyArg(), "high_severity", sqlmock.AnyArg(), sqlmock.AnyArg(), "UTC", sqlmock.AnyArg(), sqlmock.AnyArg()).
 		WillReturnRows(sqlmock.NewRows([]string{"id", "inserted"}).AddRow("rreq_01TEST987654321098765432109876", true))
 
 	mock.ExpectQuery("INSERT INTO report_requests").
-		WithArgs(sqlmock.AnyArg(), "high_severity", sqlmock.AnyArg(), sqlmock.AnyArg(), "UTC", sqlmock.AnyArg()).
+		WithArgs(sqlmock.AnyArg(), "high_severity", sqlmock.AnyArg(), sqlmock.AnyArg(), "UTC", sqlmock.AnyArg(), sqlmock.AnyArg()).
 		WillReturnRows(sqlmock.NewRows([]string{"id", "inserted"}).AddRow("rreq_01TEST987654321098765432109877", true))
 
 	if err := s.checkHighSeverityIncidents(); err != nil {
@@ -226,13 +226,10 @@ func TestCheckHighSeverityFollowUpDispatchesOnTerminal(t *testing.T) {
 	})
 	defer s.reporter.Close()
 
-	// Pending high-severity report request with incident ID in idempotency hash suffix.
-	baseHash := "hash_" + generateULID("hsh")
-	idempotencyHash := baseHash + "|inc_01TEST111111111111111111111111"
-
-	mock.ExpectQuery("SELECT rr.id, rr.idempotency_hash FROM report_requests rr").
-		WillReturnRows(sqlmock.NewRows([]string{"id", "idempotency_hash"}).
-			AddRow("rreq_01TEST123456789012345678901234", idempotencyHash))
+	// Pending high-severity report request, incident recorded in its own column.
+	mock.ExpectQuery("SELECT rr.id, rr.incident_id FROM report_requests rr").
+		WillReturnRows(sqlmock.NewRows([]string{"id", "incident_id"}).
+			AddRow("rreq_01TEST123456789012345678901234", "inc_01TEST111111111111111111111111"))
 
 	// Investigation run in terminal state.
 	mock.ExpectQuery("SELECT COUNT\\(\\*\\) FROM investigation_runs").
@@ -263,11 +260,9 @@ func TestCheckHighSeverityFollowUpSkipsNonTerminal(t *testing.T) {
 		HighSeverityThreshold:   "high",
 	})
 
-	idempotencyHash := "hash_" + generateULID("hsh") + "|inc_01TEST111111111111111111111111"
-
-	mock.ExpectQuery("SELECT rr.id, rr.idempotency_hash FROM report_requests rr").
-		WillReturnRows(sqlmock.NewRows([]string{"id", "idempotency_hash"}).
-			AddRow("rreq_01TEST123456789012345678901234", idempotencyHash))
+	mock.ExpectQuery("SELECT rr.id, rr.incident_id FROM report_requests rr").
+		WillReturnRows(sqlmock.NewRows([]string{"id", "incident_id"}).
+			AddRow("rreq_01TEST123456789012345678901234", "inc_01TEST111111111111111111111111"))
 
 	// No terminal investigation runs.
 	mock.ExpectQuery("SELECT COUNT\\(\\*\\) FROM investigation_runs").
@@ -308,7 +303,7 @@ func TestCheckAndTriggerRecordsHighSeverityCheck(t *testing.T) {
 	mock.ExpectQuery("SELECT id FROM incidents").
 		WithArgs(4).
 		WillReturnRows(sqlmock.NewRows([]string{"id"}))
-	mock.ExpectQuery("SELECT rr.id, rr.idempotency_hash FROM report_requests rr").
+	mock.ExpectQuery("SELECT rr.id, rr.incident_id FROM report_requests rr").
 		WillReturnRows(sqlmock.NewRows([]string{"id", "idempotency_hash"}))
 	if err := s.checkAndTrigger(); err != nil {
 		t.Fatal(err)
@@ -338,7 +333,7 @@ func TestCreateDailyReportRequest(t *testing.T) {
 
 	// First call - should insert
 	mock.ExpectQuery("INSERT INTO report_requests").
-		WithArgs(sqlmock.AnyArg(), "daily", sqlmock.AnyArg(), sqlmock.AnyArg(), "Asia/Jakarta", sqlmock.AnyArg()).
+		WithArgs(sqlmock.AnyArg(), "daily", sqlmock.AnyArg(), sqlmock.AnyArg(), "Asia/Jakarta", sqlmock.AnyArg(), "").
 		WillReturnRows(sqlmock.NewRows([]string{"id", "inserted"}).AddRow("rreq_01TEST123456789012345678901234", true))
 
 	resp, err := s.CreateDailyReportRequest(context.Background(), "2026-08-16", "Asia/Jakarta")
@@ -363,7 +358,7 @@ func TestCreateDailyReportRequest_Duplicate(t *testing.T) {
 
 	// Second call with same hash - should return existing
 	mock.ExpectQuery("INSERT INTO report_requests").
-		WithArgs(sqlmock.AnyArg(), "daily", sqlmock.AnyArg(), sqlmock.AnyArg(), "Asia/Jakarta", sqlmock.AnyArg()).
+		WithArgs(sqlmock.AnyArg(), "daily", sqlmock.AnyArg(), sqlmock.AnyArg(), "Asia/Jakarta", sqlmock.AnyArg(), "").
 		WillReturnRows(sqlmock.NewRows([]string{"id", "inserted"}).AddRow("rreq_01TEST123456789012345678901234", false))
 
 	resp, err := s.CreateDailyReportRequest(context.Background(), "2026-08-16", "Asia/Jakarta")
@@ -409,7 +404,7 @@ func TestCreateHighSeverityReportRequest_WithExplicitIncidents(t *testing.T) {
 
 	// Insert report request for the incident
 	mock.ExpectQuery("INSERT INTO report_requests").
-		WithArgs(sqlmock.AnyArg(), "high_severity", sqlmock.AnyArg(), sqlmock.AnyArg(), "UTC", sqlmock.AnyArg()).
+		WithArgs(sqlmock.AnyArg(), "high_severity", sqlmock.AnyArg(), sqlmock.AnyArg(), "UTC", sqlmock.AnyArg(), sqlmock.AnyArg()).
 		WillReturnRows(sqlmock.NewRows([]string{"id", "inserted"}).AddRow("rreq_01TEST987654321098765432109876", true))
 
 	resp, err := s.CreateHighSeverityReportRequest(context.Background(), []string{"inc_01TEST123456789012345678901234"}, false, false)
@@ -429,7 +424,7 @@ func TestCreateHighSeverityReportRequest_DuplicatePerIncident(t *testing.T) {
 
 	// Insert report request - duplicate
 	mock.ExpectQuery("INSERT INTO report_requests").
-		WithArgs(sqlmock.AnyArg(), "high_severity", sqlmock.AnyArg(), sqlmock.AnyArg(), "UTC", sqlmock.AnyArg()).
+		WithArgs(sqlmock.AnyArg(), "high_severity", sqlmock.AnyArg(), sqlmock.AnyArg(), "UTC", sqlmock.AnyArg(), sqlmock.AnyArg()).
 		WillReturnRows(sqlmock.NewRows([]string{"id", "inserted"}).AddRow("rreq_01TEST987654321098765432109876", false))
 
 	mock.ExpectQuery("UPDATE report_requests").
@@ -465,7 +460,7 @@ func TestCreateHighSeverityReportRequest_RequeuesStaleRequest(t *testing.T) {
 		WithArgs(sqlmock.AnyArg(), 4).
 		WillReturnRows(sqlmock.NewRows([]string{"id"}).AddRow("inc_01TEST123456789012345678901234"))
 	mock.ExpectQuery("INSERT INTO report_requests").
-		WithArgs(sqlmock.AnyArg(), "high_severity", sqlmock.AnyArg(), sqlmock.AnyArg(), "UTC", sqlmock.AnyArg()).
+		WithArgs(sqlmock.AnyArg(), "high_severity", sqlmock.AnyArg(), sqlmock.AnyArg(), "UTC", sqlmock.AnyArg(), sqlmock.AnyArg()).
 		WillReturnRows(sqlmock.NewRows([]string{"id", "inserted"}).AddRow("rreq_01TEST987654321098765432109876", false))
 	mock.ExpectQuery("UPDATE report_requests").
 		WithArgs("rreq_01TEST987654321098765432109876").
@@ -507,7 +502,7 @@ func TestTriggerDailyReportForDate(t *testing.T) {
 
 	// Insert report request
 	mock.ExpectQuery("INSERT INTO report_requests").
-		WithArgs(sqlmock.AnyArg(), "daily", sqlmock.AnyArg(), sqlmock.AnyArg(), "Asia/Jakarta", sqlmock.AnyArg()).
+		WithArgs(sqlmock.AnyArg(), "daily", sqlmock.AnyArg(), sqlmock.AnyArg(), "Asia/Jakarta", sqlmock.AnyArg(), "").
 		WillReturnRows(sqlmock.NewRows([]string{"id", "inserted"}).AddRow("rreq_01TEST123456789012345678901234", true))
 
 	err := s.triggerDailyReportForDate(time.Date(2026, 8, 16, 7, 0, 0, 0, time.UTC))
@@ -594,7 +589,7 @@ func TestCheckAndTrigger_DailyReport(t *testing.T) {
 	// The checkAndTrigger uses time.Now() which we can't easily control
 
 	mock.ExpectQuery("INSERT INTO report_requests").
-		WithArgs(sqlmock.AnyArg(), "daily", sqlmock.AnyArg(), sqlmock.AnyArg(), "Asia/Jakarta", sqlmock.AnyArg()).
+		WithArgs(sqlmock.AnyArg(), "daily", sqlmock.AnyArg(), sqlmock.AnyArg(), "Asia/Jakarta", sqlmock.AnyArg(), "").
 		WillReturnRows(sqlmock.NewRows([]string{"id", "inserted"}).AddRow("rreq_01TEST123456789012345678901234", true))
 
 	err := s.triggerDailyReportForDate(time.Date(2026, 8, 16, 7, 0, 0, 0, time.UTC))
@@ -752,6 +747,7 @@ func TestDailyReportCoversTheDayThatJustEnded(t *testing.T) {
 			sqlmock.AnyArg(),
 			"Asia/Jakarta",
 			sqlmock.AnyArg(),
+			"",
 		).
 		WillReturnRows(sqlmock.NewRows([]string{"id", "inserted"}).
 			AddRow("rreq_01TEST123456789012345678901234", true))
@@ -828,4 +824,21 @@ func TestDispatchPendingDailyRequestsIsIdempotent(t *testing.T) {
 	time.Sleep(100 * time.Millisecond)
 	require.Zero(t, calls, "nothing pending means nothing dispatched")
 	require.NoError(t, mock.ExpectationsWereMet())
+}
+
+// TestHighSeverityHashIsPerIncidentNotPerWindow pins the duplicate that reached
+// Discord: one critical incident produced three identical cards because the
+// idempotency key included the sliding ten-minute window. Every window the
+// incident spanned was a new key, so every window was a new report.
+func TestHighSeverityHashIsPerIncidentNotPerWindow(t *testing.T) {
+	a := GenerateIncidentReportHash("inc_01TEST111111111111111111111111", ReportPolicyVersion)
+	b := GenerateIncidentReportHash("inc_01TEST111111111111111111111111", ReportPolicyVersion)
+	other := GenerateIncidentReportHash("inc_01TEST222222222222222222222222", ReportPolicyVersion)
+
+	require.Equal(t, a, b, "the same incident must hash to the same key at any time")
+	require.NotEqual(t, a, other, "different incidents must not share a key")
+
+	// A new policy version changes the report's content, so it must produce a
+	// new report rather than being swallowed by the old key.
+	require.NotEqual(t, a, GenerateIncidentReportHash("inc_01TEST111111111111111111111111", ReportPolicyVersion+1))
 }

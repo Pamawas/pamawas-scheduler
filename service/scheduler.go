@@ -429,7 +429,7 @@ func (s *Scheduler) CreateDailyReportRequest(ctx context.Context, reportDate, ti
 	idempotencyHash := GenerateIdempotencyHash("daily", boundaries.PeriodStart, boundaries.PeriodEnd, timezone, ReportPolicyVersion)
 
 	// Try to insert the report request (idempotent)
-	requestID, duplicate, err := s.insertReportRequest(ctx, "daily", boundaries.PeriodStart, boundaries.PeriodEnd, timezone, idempotencyHash)
+	requestID, duplicate, err := s.insertReportRequest(ctx, "daily", boundaries.PeriodStart, boundaries.PeriodEnd, timezone, idempotencyHash, "")
 	if err != nil {
 		return resp, fmt.Errorf("failed to insert report request: %w", err)
 	}
@@ -493,12 +493,12 @@ func (s *Scheduler) CreateHighSeverityReportRequest(ctx context.Context, inciden
 	for _, incidentID := range eligibleIncidentIDs {
 		// Use a fixed period for high-severity (10 min window ending now)
 		boundaries := ComputeHighSeverityPeriod()
-		idempotencyHash := GenerateIdempotencyHash("high_severity", boundaries.PeriodStart, boundaries.PeriodEnd, "UTC", ReportPolicyVersion)
 
-		// Include incident ID in the hash for per-incident idempotency
-		incidentSpecificHash := idempotencyHash + "|" + incidentID
+		// Keyed on the incident, not the window: an incident that stays open
+		// for thirty minutes must not produce three identical reports.
+		incidentSpecificHash := GenerateIncidentReportHash(incidentID, ReportPolicyVersion)
 
-		requestID, isDup, err := s.insertReportRequest(ctx, "high_severity", boundaries.PeriodStart, boundaries.PeriodEnd, "UTC", incidentSpecificHash)
+		requestID, isDup, err := s.insertReportRequest(ctx, "high_severity", boundaries.PeriodStart, boundaries.PeriodEnd, "UTC", incidentSpecificHash, incidentID)
 		if err != nil {
 			log.Error().Err(err).Str("incident_id", incidentID).Msg("Failed to insert high severity report request")
 			continue
@@ -554,13 +554,13 @@ func (s *Scheduler) CreateHighSeverityReportRequest(ctx context.Context, inciden
 }
 
 // insertReportRequest inserts a report request with idempotency
-func (s *Scheduler) insertReportRequest(ctx context.Context, requestType string, periodStart, periodEnd time.Time, timezone, idempotencyHash string) (string, bool, error) {
+func (s *Scheduler) insertReportRequest(ctx context.Context, requestType string, periodStart, periodEnd time.Time, timezone, idempotencyHash, incidentID string) (string, bool, error) {
 	// Generate a new ULID for the request ID
 	requestID := generateULID("rreq")
 
 	query := `
-		INSERT INTO report_requests (id, request_type, period_start, period_end, timezone, idempotency_hash, status, attempts, created_at, updated_at)
-		VALUES ($1, $2, $3, $4, $5, $6, 'pending', 0, now(), now())
+		INSERT INTO report_requests (id, request_type, period_start, period_end, timezone, idempotency_hash, incident_id, status, attempts, created_at, updated_at)
+		VALUES ($1, $2, $3, $4, $5, $6, NULLIF($7, ''), 'pending', 0, now(), now())
 		ON CONFLICT (idempotency_hash) DO UPDATE SET
 			updated_at = report_requests.updated_at
 		RETURNING id, (xmax = 0) as inserted
@@ -568,7 +568,7 @@ func (s *Scheduler) insertReportRequest(ctx context.Context, requestType string,
 
 	var returnedID string
 	var inserted bool
-	err := s.db.QueryRowContext(ctx, query, requestID, requestType, periodStart, periodEnd, timezone, idempotencyHash).Scan(&returnedID, &inserted)
+	err := s.db.QueryRowContext(ctx, query, requestID, requestType, periodStart, periodEnd, timezone, idempotencyHash, incidentID).Scan(&returnedID, &inserted)
 	if err != nil {
 		return "", false, err
 	}
@@ -726,10 +726,11 @@ func (s *Scheduler) checkHighSeverityFollowUp() error {
 	}
 
 	query := `
-		SELECT rr.id, rr.idempotency_hash
+		SELECT rr.id, rr.incident_id
 		FROM report_requests rr
 		WHERE rr.request_type = 'high_severity'
 		  AND rr.status = 'pending'
+		  AND rr.incident_id IS NOT NULL
 		  AND NOT EXISTS (SELECT 1 FROM reports r WHERE r.request_id = rr.id)
 	`
 
@@ -744,31 +745,23 @@ func (s *Scheduler) checkHighSeverityFollowUp() error {
 	}()
 
 	type pendingRequest struct {
-		requestID       string
-		idempotencyHash string
+		requestID  string
+		incidentID string
 	}
 	var pending []pendingRequest
 	for rows.Next() {
-		var id, hash string
-		if err := rows.Scan(&id, &hash); err != nil {
+		var req pendingRequest
+		if err := rows.Scan(&req.requestID, &req.incidentID); err != nil {
 			return err
 		}
-		pending = append(pending, pendingRequest{requestID: id, idempotencyHash: hash})
+		pending = append(pending, req)
 	}
 	if err := rows.Err(); err != nil {
 		return err
 	}
 
 	for _, req := range pending {
-		// Extract incident ID from the idempotency hash suffix ("baseHash|incidentID")
-		incidentID := ""
-		if idx := strings.LastIndex(req.idempotencyHash, "|"); idx >= 0 && idx+1 < len(req.idempotencyHash) {
-			incidentID = req.idempotencyHash[idx+1:]
-		}
-		if incidentID == "" {
-			log.Warn().Str("request_id", req.requestID).Msg("Cannot extract incident ID from idempotency hash; skipping follow-up")
-			continue
-		}
+		incidentID := req.incidentID
 
 		// Check whether any investigation run for this incident has reached a
 		// terminal state (completed, failed, or failed_terminal).

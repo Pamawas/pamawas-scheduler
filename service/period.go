@@ -92,6 +92,20 @@ func GenerateIdempotencyHash(requestType string, periodStart, periodEnd time.Tim
 // ReportPolicyVersion is the current report policy version
 const ReportPolicyVersion = 1
 
+// GenerateIncidentReportHash is the idempotency key for a high-severity report.
+//
+// It is deliberately independent of the report period. Including the sliding
+// ten-minute window meant a long incident produced a fresh request — and a
+// fresh, identical Discord card — every ten minutes it stayed open; one
+// incident arrived three times. A high-severity report answers "what is wrong
+// with this incident", so one incident gets one report, keyed on the incident
+// and the policy version that shapes its content.
+func GenerateIncidentReportHash(incidentID string, policyVersion int) string {
+	data := fmt.Sprintf("high_severity|%s|%d", incidentID, policyVersion)
+	hash := sha256.Sum256([]byte(data))
+	return hex.EncodeToString(hash[:])
+}
+
 // ULID generation for request IDs
 var (
 	ulidMu   sync.Mutex
