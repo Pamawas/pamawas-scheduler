@@ -13,6 +13,8 @@ import (
 
 	"github.com/lib/pq"
 	"github.com/rs/zerolog/log"
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/propagation"
 
 	"github.com/Pamawas/pamawas-scheduler/metrics"
 	"github.com/Pamawas/pamawas-scheduler/models"
@@ -81,6 +83,7 @@ func (c *ReporterClient) SendReportRequest(payload ReportPayload) error {
 	if err != nil {
 		return err
 	}
+	otel.GetTextMapPropagator().Inject(c.ctx, propagation.HeaderCarrier(req.Header))
 	req.Header.Set("Content-Type", "application/json")
 	if c.serviceToken != "" {
 		req.Header.Set("X-Service-Token", c.serviceToken)

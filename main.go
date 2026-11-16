@@ -117,6 +117,9 @@ func main() {
 	}, handler)
 	handler = middleware.LoggingMiddleware("pamawas-scheduler", handler)
 	handler = middleware.ErrorLoggingMiddleware("pamawas-scheduler", handler)
+	// Tracing is outermost so every request gets a span, and so the logging
+	// middleware below it can log the real trace and span IDs.
+	handler = middleware.TracingMiddleware("pamawas-scheduler", handler)
 
 	// Create server
 	srv := &http.Server{
