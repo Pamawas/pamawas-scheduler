@@ -685,6 +685,10 @@ func (s *Scheduler) requeueStaleReportRequest(ctx context.Context, requestID str
 // considered high severity.
 func severityRank(severity string) int {
 	switch strings.ToLower(severity) {
+	case "unknown":
+		// The absence of a severity, and the rank of the "unknown" threshold.
+		// It sits below debug so that threshold admits every event.
+		return 0
 	case "debug":
 		return 1
 	case "info":

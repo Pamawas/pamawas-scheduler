@@ -9,11 +9,11 @@ import (
 )
 
 type Config struct {
-	DatabaseURL             string
-	Port                    string
-	LogLevel                string
-	Environment             string
-	ReporterURL             string
+	DatabaseURL string
+	Port        string
+	LogLevel    string
+	Environment string
+	ReporterURL string
 	// ServiceToken authenticates outbound calls to the reporter, which rejects
 	// unauthenticated callers on every /api/v1 route.
 	ServiceToken            string
@@ -160,9 +160,11 @@ func (c Config) Validate() error {
 		return fmt.Errorf("daily_report_time must be HH:MM, got %q", c.DailyReportTime)
 	}
 	switch strings.ToLower(c.HighSeverityThreshold) {
-	case "debug", "info", "warning", "high", "critical":
+	// "unknown" is the absence of a gate: it ranks below every real severity,
+	// so every event passes. Use it when all alerts must flow through.
+	case "unknown", "debug", "info", "warning", "high", "critical":
 	default:
-		return fmt.Errorf("high_severity_threshold must be one of debug|info|warning|high|critical, got %q", c.HighSeverityThreshold)
+		return fmt.Errorf("high_severity_threshold must be one of unknown|debug|info|warning|high|critical, got %q", c.HighSeverityThreshold)
 	}
 	if c.DefaultTimezone == "" {
 		return fmt.Errorf("default_timezone is required")
