@@ -320,33 +320,96 @@ func (s *Scheduler) checkAndTrigger() error {
 		log.Info().Int("count", requeued).Msg("Requeued stale report requests this tick")
 	}
 
+	// Phase 4: Dispatch pending daily requests. Runs after the requeue sweep so
+	// a request recovered in Phase 3 is dispatched in the same tick.
+	if err := s.dispatchPendingDailyRequests(); err != nil {
+		log.Error().Err(err).Msg("Failed to dispatch pending daily report requests")
+	}
+
 	return nil
 }
 
-// triggerDailyReportForDate triggers a daily report for a specific date
+// triggerDailyReportForDate records that a daily report is owed for a date.
+//
+// It does not dispatch: the tick's dispatch sweep owns that, so the cron path
+// and the manual API path behave identically and a failed send is retried
+// instead of losing the day's report.
 func (s *Scheduler) triggerDailyReportForDate(reportDate time.Time) error {
 	dateStr := reportDate.Format("2006-01-02")
 	resp, err := s.CreateDailyReportRequest(s.ctx, dateStr, s.config.DefaultTimezone)
 	if err != nil {
 		return err
 	}
+	if !resp.Duplicate {
+		log.Info().Str("request_id", resp.RequestID).Str("report_date", dateStr).
+			Msg("Daily report request recorded; dispatch sweep will send it")
+	}
+	return nil
+}
 
-	if !resp.Duplicate && resp.RequestID != "" {
-		// Send to reporter with the created request
-		payload := ReportPayload{
-			ContractVersion: 1,
-			RequestID:       resp.RequestID,
-			ReportType:      "daily",
-			PeriodStart:     resp.PeriodStart.Format(time.RFC3339),
-			PeriodEnd:       resp.PeriodEnd.Format(time.RFC3339),
-			Timezone:        resp.Timezone,
-			IncidentIDs:     []string{}, // Reporter selects incidents for daily
+// dispatchPendingDailyRequests sends pending daily report requests to the
+// reporter.
+//
+// Creating the request and producing the report are separate steps on purpose.
+// The row is the durable record of what is owed; dispatch is an HTTP call that
+// can fail. Dispatching inline, as this used to, had two costs: a daily report
+// was lost for the whole day if the reporter happened to be restarting at
+// 07:00, and the manual POST /api/v1/report-requests/daily endpoint created a
+// row that nothing ever generated — it sat `pending` until the stale-requeue
+// sweep reset it to `pending` again, forever.
+//
+// Re-dispatching is safe. The reporter claims a request atomically
+// (pending -> generating) before doing any work, so a request already being
+// generated is no longer pending and drops out of this query.
+func (s *Scheduler) dispatchPendingDailyRequests() error {
+	rows, err := s.db.QueryContext(s.ctx, `
+		SELECT rr.id, rr.period_start, rr.period_end, rr.timezone
+		FROM report_requests rr
+		WHERE rr.request_type = 'daily'
+		  AND rr.status = 'pending'
+		  AND (rr.next_attempt_at IS NULL OR rr.next_attempt_at <= now())
+		  AND NOT EXISTS (SELECT 1 FROM reports r WHERE r.request_id = rr.id)
+		ORDER BY rr.created_at
+		LIMIT 20
+	`)
+	if err != nil {
+		return err
+	}
+	defer func() {
+		if closeErr := rows.Close(); closeErr != nil {
+			log.Error().Err(closeErr).Msg("Failed to close rows")
 		}
-		if err := s.reporter.SendReportRequest(payload); err != nil {
-			log.Error().Err(err).Str("request_id", resp.RequestID).Msg("Failed to send daily report request to reporter")
+	}()
+
+	type pendingDaily struct {
+		requestID   string
+		periodStart time.Time
+		periodEnd   time.Time
+		timezone    string
+	}
+	var pending []pendingDaily
+	for rows.Next() {
+		var p pendingDaily
+		if err := rows.Scan(&p.requestID, &p.periodStart, &p.periodEnd, &p.timezone); err != nil {
 			return err
 		}
-		log.Info().Str("request_id", resp.RequestID).Msg("Daily report request sent to reporter")
+		pending = append(pending, p)
+	}
+	if err := rows.Err(); err != nil {
+		return err
+	}
+
+	for _, p := range pending {
+		s.reporter.SendReportRequestAsync(ReportPayload{
+			ContractVersion: 1,
+			RequestID:       p.requestID,
+			ReportType:      "daily",
+			PeriodStart:     p.periodStart.Format(time.RFC3339),
+			PeriodEnd:       p.periodEnd.Format(time.RFC3339),
+			Timezone:        p.timezone,
+			IncidentIDs:     []string{}, // Reporter selects incidents for daily
+		})
+		log.Info().Str("request_id", p.requestID).Msg("Dispatched daily report request")
 	}
 
 	return nil

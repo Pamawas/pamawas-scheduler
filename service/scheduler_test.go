@@ -766,3 +766,66 @@ func TestDailyReportCoversTheDayThatJustEnded(t *testing.T) {
 
 	require.NoError(t, mock.ExpectationsWereMet())
 }
+
+// TestDispatchPendingDailyRequestsSendsUndispatchedRequests pins the gap that
+// made the manual daily endpoint a no-op: the request row was created and
+// nothing ever sent it to the reporter, so the report was never generated.
+func TestDispatchPendingDailyRequestsSendsUndispatchedRequests(t *testing.T) {
+	received := make(chan ReportPayload, 1)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var payload ReportPayload
+		if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+			t.Errorf("decode error: %v", err)
+			w.WriteHeader(http.StatusBadRequest)
+			return
+		}
+		received <- payload
+		w.WriteHeader(http.StatusAccepted)
+	}))
+	defer server.Close()
+
+	s, mock := newMockScheduler(t, SchedulerConfig{ReporterURL: server.URL, DefaultTimezone: "Asia/Jakarta"})
+
+	start := time.Date(2026, 11, 15, 17, 0, 0, 0, time.UTC)
+	end := time.Date(2026, 11, 16, 17, 0, 0, 0, time.UTC)
+	mock.ExpectQuery("SELECT rr.id, rr.period_start, rr.period_end, rr.timezone").
+		WillReturnRows(sqlmock.NewRows([]string{"id", "period_start", "period_end", "timezone"}).
+			AddRow("rreq_01TEST123456789012345678901234", start, end, "Asia/Jakarta"))
+
+	require.NoError(t, s.dispatchPendingDailyRequests())
+
+	select {
+	case payload := <-received:
+		require.Equal(t, "rreq_01TEST123456789012345678901234", payload.RequestID)
+		require.Equal(t, "daily", payload.ReportType)
+		require.Equal(t, 1, payload.ContractVersion)
+		require.Equal(t, "2026-11-15T17:00:00Z", payload.PeriodStart)
+		require.Equal(t, "2026-11-16T17:00:00Z", payload.PeriodEnd)
+		require.Equal(t, "Asia/Jakarta", payload.Timezone)
+		require.Empty(t, payload.IncidentIDs, "reporter selects daily incidents itself")
+	case <-time.After(2 * time.Second):
+		t.Fatal("pending daily request was not dispatched")
+	}
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
+// TestDispatchPendingDailyRequestsIsIdempotent verifies the sweep only sees
+// requests that are still pending. The reporter flips a request to `generating`
+// on claim, so an in-flight request must not be dispatched again.
+func TestDispatchPendingDailyRequestsIsIdempotent(t *testing.T) {
+	calls := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls++
+		w.WriteHeader(http.StatusAccepted)
+	}))
+	defer server.Close()
+
+	s, mock := newMockScheduler(t, SchedulerConfig{ReporterURL: server.URL, DefaultTimezone: "UTC"})
+	mock.ExpectQuery("SELECT rr.id, rr.period_start, rr.period_end, rr.timezone").
+		WillReturnRows(sqlmock.NewRows([]string{"id", "period_start", "period_end", "timezone"}))
+
+	require.NoError(t, s.dispatchPendingDailyRequests())
+	time.Sleep(100 * time.Millisecond)
+	require.Zero(t, calls, "nothing pending means nothing dispatched")
+	require.NoError(t, mock.ExpectationsWereMet())
+}
