@@ -1038,7 +1038,13 @@ func (s *Scheduler) checkAndTriggerDaily(now time.Time) error {
 
 	if allowed {
 		log.Info().Str("time", s.config.DailyReportTime).Msg("Time for daily report")
-		if err := s.triggerDailyReportForDate(localNow); err != nil {
+		// The report covers the day that just ended, not the one that just
+		// started. Firing at 07:00 with today's date produced a window of
+		// today 00:00 → tomorrow 00:00, which is 17 hours in the future at
+		// generation time: the card was titled with tomorrow's date, and each
+		// day's 07:00–24:00 window was never covered by any report.
+		reportDate := localNow.AddDate(0, 0, -1)
+		if err := s.triggerDailyReportForDate(reportDate); err != nil {
 			log.Error().Err(err).Msg("Failed to trigger daily report")
 			return err
 		} else {

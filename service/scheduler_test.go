@@ -721,3 +721,48 @@ func TestReportEligibilityIncludesRecentlyResolved(t *testing.T) {
 		}
 	}
 }
+
+// TestDailyReportCoversTheDayThatJustEnded pins the window. The job fires at
+// 07:00, so reporting "today" produced a period of today 00:00 → tomorrow
+// 00:00: 17 hours in the future at generation time, a card titled with
+// tomorrow's date, and a 07:00–24:00 slice that no report ever covered.
+func TestDailyReportCoversTheDayThatJustEnded(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusAccepted)
+	}))
+	defer server.Close()
+
+	s, mock := newMockScheduler(t, SchedulerConfig{
+		ReporterURL:       server.URL,
+		DefaultTimezone:   "Asia/Jakarta",
+		DailyReportTime:   "07:00",
+		EnableDailyReport: true,
+	})
+
+	// 07:00 on 16 Aug 2026 in Jakarta.
+	now := time.Date(2026, 8, 16, 0, 0, 0, 0, time.UTC)
+	want, err := ComputeDailyPeriod("2026-08-15", "Asia/Jakarta")
+	require.NoError(t, err)
+
+	mock.ExpectQuery("INSERT INTO report_requests").
+		WithArgs(
+			sqlmock.AnyArg(),
+			"daily",
+			sqlmock.AnyArg(),
+			sqlmock.AnyArg(),
+			"Asia/Jakarta",
+			sqlmock.AnyArg(),
+		).
+		WillReturnRows(sqlmock.NewRows([]string{"id", "inserted"}).
+			AddRow("rreq_01TEST123456789012345678901234", true))
+
+	require.NoError(t, s.checkAndTriggerDaily(now))
+
+	// The bound period must be the previous local calendar day, which in UTC
+	// starts at 17:00 on the day before that.
+	require.Equal(t, want.PeriodStart, time.Date(2026, 8, 14, 17, 0, 0, 0, time.UTC))
+	require.Equal(t, want.PeriodEnd, time.Date(2026, 8, 15, 17, 0, 0, 0, time.UTC))
+	require.Equal(t, 24*time.Hour, want.PeriodEnd.Sub(want.PeriodStart))
+
+	require.NoError(t, mock.ExpectationsWereMet())
+}
