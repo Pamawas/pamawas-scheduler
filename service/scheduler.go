@@ -286,7 +286,17 @@ func (s *Scheduler) checkAndTrigger() error {
 	s.metrics.SchedulerRunning.Set(1)
 	s.mu.Unlock()
 
+	// A tick is real work with no HTTP request behind it, so it is the only
+	// thing in this service that would otherwise be invisible in Tempo. One
+	// span per tick keeps "the scheduler did nothing for an hour" and "the
+	// scheduler never ran" distinguishable.
+	//
+	// The span is built from s.ctx rather than assigned back into it: s.ctx is
+	// read by the worker loop and the HTTP handlers, so writing it here would be
+	// a data race for the sake of nesting that the tick's children do not need.
+	_, span := otel.Tracer("pamawas-scheduler").Start(s.ctx, "scheduler.tick")
 	defer func() {
+		span.End()
 		s.mu.Lock()
 		s.running = false
 		s.metrics.SchedulerRunning.Set(0)
