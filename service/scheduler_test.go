@@ -882,6 +882,23 @@ func TestCheckAndEnqueueStaleIncidentVerifications(t *testing.T) {
 	require.NoError(t, mock.ExpectationsWereMet())
 }
 
+func TestParseAffectedServices(t *testing.T) {
+	// PostgreSQL array format
+	got, err := parseAffectedServices([]byte(`{"api","worker"}`))
+	require.NoError(t, err)
+	require.Equal(t, []string{"api", "worker"}, got)
+
+	// JSON array format
+	got, err = parseAffectedServices([]byte(`["api", "worker"]`))
+	require.NoError(t, err)
+	require.Equal(t, []string{"api", "worker"}, got)
+
+	// Empty
+	got, err = parseAffectedServices([]byte(``))
+	require.NoError(t, err)
+	require.Empty(t, got)
+}
+
 func TestProcessCompletedStaleIncidentVerifications_Recovered(t *testing.T) {
 	s, mock := newMockScheduler(t, SchedulerConfig{
 		EnableStaleVerification: true,

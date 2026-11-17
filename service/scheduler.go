@@ -390,16 +390,18 @@ func (s *Scheduler) checkAndTrigger() error {
 		log.Error().Err(err).Msg("Failed to dispatch pending daily report requests")
 	}
 
-	// Phase 5: Enqueue stale incident verifications for open incidents silent
+	// Phase 5: Process completed stale incident verifications: close recovered
+	// incidents, update back-off for still-down incidents, and notify reporter.
+	// Runs before the enqueue sweep so newly completed records are processed
+	// and marked reported before Phase 6 evaluates them.
+	if err := s.processCompletedStaleIncidentVerifications(now); err != nil {
+		log.Error().Err(err).Msg("Failed to process completed stale incident verifications")
+	}
+
+	// Phase 6: Enqueue stale incident verifications for open incidents silent
 	// past INCIDENT_STALE_AFTER with back-off awareness.
 	if err := s.checkAndEnqueueStaleIncidentVerifications(now); err != nil {
 		log.Error().Err(err).Msg("Failed to enqueue stale incident verifications")
-	}
-
-	// Phase 6: Process completed stale incident verifications: close recovered
-	// incidents, update back-off for still-down incidents, and notify reporter.
-	if err := s.processCompletedStaleIncidentVerifications(now); err != nil {
-		log.Error().Err(err).Msg("Failed to process completed stale incident verifications")
 	}
 
 	return nil
@@ -1221,7 +1223,7 @@ func (s *Scheduler) checkAndEnqueueStaleIncidentVerifications(now time.Time) err
 		  AND i.last_event_at <= $1
 		  AND (
 		      sv.incident_id IS NULL
-		      OR (sv.status IN ('completed', 'failed') AND sv.next_verify_at <= $2)
+		      OR (sv.status IN ('completed', 'failed') AND sv.reported_at IS NOT NULL AND sv.next_verify_at <= $2)
 		  )
 		ORDER BY i.last_event_at ASC
 		LIMIT 10
@@ -1255,6 +1257,7 @@ func (s *Scheduler) checkAndEnqueueStaleIncidentVerifications(now time.Time) err
 				status = 'queued',
 				updated_at = now()
 			WHERE stale_verifications.status NOT IN ('queued', 'running')
+			  AND stale_verifications.reported_at IS NOT NULL
 		`, incidentID)
 		if err != nil {
 			log.Error().Err(err).Str("incident_id", incidentID).Msg("Failed to enqueue stale incident verification")
@@ -1263,6 +1266,21 @@ func (s *Scheduler) checkAndEnqueueStaleIncidentVerifications(now time.Time) err
 		}
 	}
 	return nil
+}
+
+func parseAffectedServices(raw []byte) ([]string, error) {
+	if len(raw) == 0 {
+		return []string{}, nil
+	}
+	var arr pq.StringArray
+	if err := arr.Scan(raw); err == nil {
+		return []string(arr), nil
+	}
+	var result []string
+	if err := json.Unmarshal(raw, &result); err == nil {
+		return result, nil
+	}
+	return nil, fmt.Errorf("invalid affected_services format: %s", string(raw))
 }
 
 type completedVerificationItem struct {
@@ -1314,8 +1332,11 @@ func (s *Scheduler) processCompletedStaleIncidentVerifications(now time.Time) er
 			return err
 		}
 		if len(affected) > 0 {
-			if err := json.Unmarshal(affected, &item.affectedServices); err != nil {
-				log.Warn().Err(err).Str("incident_id", item.incidentID).Msg("Failed to unmarshal affected services")
+			services, err := parseAffectedServices(affected)
+			if err != nil {
+				log.Warn().Err(err).Str("incident_id", item.incidentID).Msg("Failed to parse affected services")
+			} else {
+				item.affectedServices = services
 			}
 		}
 		items = append(items, item)
