@@ -160,7 +160,11 @@ func (c *ReporterClient) SendVerifyReport(ctx context.Context, payload VerifyRep
 	if err != nil {
 		return err
 	}
-	defer resp.Body.Close()
+	defer func() {
+		if closeErr := resp.Body.Close(); closeErr != nil {
+			log.Error().Err(closeErr).Msg("Failed to close response body")
+		}
+	}()
 
 	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusCreated && resp.StatusCode != http.StatusAccepted {
 		return fmt.Errorf("reporter verify-report returned %d", resp.StatusCode)
@@ -1225,7 +1229,11 @@ func (s *Scheduler) checkAndEnqueueStaleIncidentVerifications(now time.Time) err
 	if err != nil {
 		return err
 	}
-	defer rows.Close()
+	defer func() {
+		if closeErr := rows.Close(); closeErr != nil {
+			log.Error().Err(closeErr).Msg("Failed to close rows")
+		}
+	}()
 
 	var incidentIDs []string
 	for rows.Next() {
@@ -1257,6 +1265,19 @@ func (s *Scheduler) checkAndEnqueueStaleIncidentVerifications(now time.Time) err
 	return nil
 }
 
+type completedVerificationItem struct {
+	incidentID       string
+	verdict          string
+	reason           string
+	attempts         int
+	verifiedAt       time.Time
+	title            string
+	severity         string
+	environment      string
+	affectedServices []string
+	lastEventAt      time.Time
+}
+
 // processCompletedStaleIncidentVerifications reads completed verification records,
 // resolves recovered incidents, updates back-off for still-down incidents, and dispatches
 // verification-outcome cards to the reporter.
@@ -1279,30 +1300,23 @@ func (s *Scheduler) processCompletedStaleIncidentVerifications(now time.Time) er
 	if err != nil {
 		return err
 	}
-	defer rows.Close()
+	defer func() {
+		if closeErr := rows.Close(); closeErr != nil {
+			log.Error().Err(closeErr).Msg("Failed to close rows")
+		}
+	}()
 
-	type completedItem struct {
-		incidentID       string
-		verdict          string
-		reason           string
-		attempts         int
-		verifiedAt       time.Time
-		title            string
-		severity         string
-		environment      string
-		affectedServices []string
-		lastEventAt      time.Time
-	}
-
-	var items []completedItem
+	var items []completedVerificationItem
 	for rows.Next() {
-		var item completedItem
+		var item completedVerificationItem
 		var affected []byte
 		if err := rows.Scan(&item.incidentID, &item.verdict, &item.reason, &item.attempts, &item.verifiedAt, &item.title, &item.severity, &item.environment, &affected, &item.lastEventAt); err != nil {
 			return err
 		}
 		if len(affected) > 0 {
-			_ = json.Unmarshal(affected, &item.affectedServices)
+			if err := json.Unmarshal(affected, &item.affectedServices); err != nil {
+				log.Warn().Err(err).Str("incident_id", item.incidentID).Msg("Failed to unmarshal affected services")
+			}
 		}
 		items = append(items, item)
 	}
@@ -1317,78 +1331,89 @@ func (s *Scheduler) processCompletedStaleIncidentVerifications(now time.Time) er
 		}
 
 		if item.verdict == "recovered" {
-			// Check if a newer event arrived after verification was conducted
-			if item.lastEventAt.After(item.verifiedAt) {
-				log.Warn().Str("incident_id", item.incidentID).Msg("Newer event arrived after verification; discarding recovered verdict")
-				_, _ = s.db.ExecContext(s.ctx, `UPDATE stale_verifications SET reported_at = now(), updated_at = now() WHERE incident_id = $1`, item.incidentID)
-				continue
-			}
-
-			// Close incident dated at verifiedAt
-			_, err := s.db.ExecContext(s.ctx, `
-				UPDATE incidents
-				SET status = 'resolved', resolved_at = $1, updated_at = now()
-				WHERE id = $2 AND status IN ('open', 'investigating')
-			`, item.verifiedAt, item.incidentID)
-			if err != nil {
-				log.Error().Err(err).Str("incident_id", item.incidentID).Msg("Failed to resolve incident on verification recovery")
-				continue
-			}
-			log.Info().Str("incident_id", item.incidentID).Msg("Resolved stale incident after verification confirmed recovery")
-
-			// Dispatch verification report card to Reporter
-			if s.reporter != nil {
-				if err := s.reporter.SendVerifyReport(s.ctx, VerifyReportPayload{
-					ContractVersion: 1,
-					IncidentID:      item.incidentID,
-					Verdict:         "recovered",
-					Title:           item.title,
-					Severity:        item.severity,
-					Environment:     item.environment,
-					Target:          target,
-					Reason:          item.reason,
-				}); err != nil {
-					log.Error().Err(err).Str("incident_id", item.incidentID).Msg("Failed to send recovered verify report to reporter")
-				}
-			}
-			_, _ = s.db.ExecContext(s.ctx, `UPDATE stale_verifications SET reported_at = now(), updated_at = now() WHERE incident_id = $1`, item.incidentID)
+			s.processRecoveredVerification(item, target)
 		} else {
-			// still_down or inconclusive: calculate backoff
-			backoff := s.calculateStaleReverifyBackoff(item.attempts)
-			nextVerifyAt := now.Add(backoff)
-
-			_, err := s.db.ExecContext(s.ctx, `
-				UPDATE stale_verifications
-				SET attempts = attempts + 1,
-				    next_verify_at = $1,
-				    reported_at = now(),
-				    updated_at = now()
-				WHERE incident_id = $2
-			`, nextVerifyAt, item.incidentID)
-			if err != nil {
-				log.Error().Err(err).Str("incident_id", item.incidentID).Msg("Failed to update backoff for still_down verification")
-				continue
-			}
-			log.Info().Str("incident_id", item.incidentID).Dur("backoff", backoff).Time("next_verify_at", nextVerifyAt).Msg("Updated back-off for still-down incident verification")
-
-			// Dispatch verification report card to Reporter
-			if s.reporter != nil {
-				if err := s.reporter.SendVerifyReport(s.ctx, VerifyReportPayload{
-					ContractVersion: 1,
-					IncidentID:      item.incidentID,
-					Verdict:         "still_down",
-					Title:           item.title,
-					Severity:        item.severity,
-					Environment:     item.environment,
-					Target:          target,
-					Reason:          item.reason,
-				}); err != nil {
-					log.Error().Err(err).Str("incident_id", item.incidentID).Msg("Failed to send still_down verify report to reporter")
-				}
-			}
+			s.processStillDownVerification(item, target, now)
 		}
 	}
 	return nil
+}
+
+func (s *Scheduler) processRecoveredVerification(item completedVerificationItem, target string) {
+	// Check if a newer event arrived after verification was conducted
+	if item.lastEventAt.After(item.verifiedAt) {
+		log.Warn().Str("incident_id", item.incidentID).Msg("Newer event arrived after verification; discarding recovered verdict")
+		if _, err := s.db.ExecContext(s.ctx, `UPDATE stale_verifications SET reported_at = now(), updated_at = now() WHERE incident_id = $1`, item.incidentID); err != nil {
+			log.Error().Err(err).Str("incident_id", item.incidentID).Msg("Failed to mark discarded verification as reported")
+		}
+		return
+	}
+
+	// Close incident dated at verifiedAt
+	_, err := s.db.ExecContext(s.ctx, `
+		UPDATE incidents
+		SET status = 'resolved', resolved_at = $1, updated_at = now()
+		WHERE id = $2 AND status IN ('open', 'investigating')
+	`, item.verifiedAt, item.incidentID)
+	if err != nil {
+		log.Error().Err(err).Str("incident_id", item.incidentID).Msg("Failed to resolve incident on verification recovery")
+		return
+	}
+	log.Info().Str("incident_id", item.incidentID).Msg("Resolved stale incident after verification confirmed recovery")
+
+	// Dispatch verification report card to Reporter
+	if s.reporter != nil {
+		if err := s.reporter.SendVerifyReport(s.ctx, VerifyReportPayload{
+			ContractVersion: 1,
+			IncidentID:      item.incidentID,
+			Verdict:         "recovered",
+			Title:           item.title,
+			Severity:        item.severity,
+			Environment:     item.environment,
+			Target:          target,
+			Reason:          item.reason,
+		}); err != nil {
+			log.Error().Err(err).Str("incident_id", item.incidentID).Msg("Failed to send recovered verify report to reporter")
+		}
+	}
+	if _, err := s.db.ExecContext(s.ctx, `UPDATE stale_verifications SET reported_at = now(), updated_at = now() WHERE incident_id = $1`, item.incidentID); err != nil {
+		log.Error().Err(err).Str("incident_id", item.incidentID).Msg("Failed to mark recovered verification as reported")
+	}
+}
+
+func (s *Scheduler) processStillDownVerification(item completedVerificationItem, target string, now time.Time) {
+	backoff := s.calculateStaleReverifyBackoff(item.attempts)
+	nextVerifyAt := now.Add(backoff)
+
+	_, err := s.db.ExecContext(s.ctx, `
+		UPDATE stale_verifications
+		SET attempts = attempts + 1,
+		    next_verify_at = $1,
+		    reported_at = now(),
+		    updated_at = now()
+		WHERE incident_id = $2
+	`, nextVerifyAt, item.incidentID)
+	if err != nil {
+		log.Error().Err(err).Str("incident_id", item.incidentID).Msg("Failed to update backoff for still_down verification")
+		return
+	}
+	log.Info().Str("incident_id", item.incidentID).Dur("backoff", backoff).Time("next_verify_at", nextVerifyAt).Msg("Updated back-off for still-down incident verification")
+
+	// Dispatch verification report card to Reporter
+	if s.reporter != nil {
+		if err := s.reporter.SendVerifyReport(s.ctx, VerifyReportPayload{
+			ContractVersion: 1,
+			IncidentID:      item.incidentID,
+			Verdict:         "still_down",
+			Title:           item.title,
+			Severity:        item.severity,
+			Environment:     item.environment,
+			Target:          target,
+			Reason:          item.reason,
+		}); err != nil {
+			log.Error().Err(err).Str("incident_id", item.incidentID).Msg("Failed to send still_down verify report to reporter")
+		}
+	}
 }
 
 func (s *Scheduler) calculateStaleReverifyBackoff(attempts int) time.Duration {
