@@ -842,3 +842,70 @@ func TestHighSeverityHashIsPerIncidentNotPerWindow(t *testing.T) {
 	// new report rather than being swallowed by the old key.
 	require.NotEqual(t, a, GenerateIncidentReportHash("inc_01TEST111111111111111111111111", ReportPolicyVersion+1))
 }
+
+func TestCalculateStaleReverifyBackoff(t *testing.T) {
+	s := &Scheduler{
+		config: SchedulerConfig{
+			StaleReverifyBaseBackoff: time.Hour,
+			StaleReverifyMaxBackoff:  24 * time.Hour,
+		},
+	}
+
+	require.Equal(t, 1*time.Hour, s.calculateStaleReverifyBackoff(0))
+	require.Equal(t, 2*time.Hour, s.calculateStaleReverifyBackoff(1))
+	require.Equal(t, 4*time.Hour, s.calculateStaleReverifyBackoff(2))
+	require.Equal(t, 8*time.Hour, s.calculateStaleReverifyBackoff(3))
+	require.Equal(t, 16*time.Hour, s.calculateStaleReverifyBackoff(4))
+	require.Equal(t, 24*time.Hour, s.calculateStaleReverifyBackoff(5))
+	require.Equal(t, 24*time.Hour, s.calculateStaleReverifyBackoff(10))
+}
+
+func TestCheckAndEnqueueStaleIncidentVerifications(t *testing.T) {
+	s, mock := newMockScheduler(t, SchedulerConfig{
+		EnableStaleVerification: true,
+		IncidentStaleAfter:      6 * time.Hour,
+	})
+
+	now := time.Now()
+	cutoff := now.Add(-6 * time.Hour)
+
+	mock.ExpectQuery("SELECT i.id.*FROM incidents i.*LEFT JOIN stale_verifications sv").
+		WithArgs(cutoff, now).
+		WillReturnRows(sqlmock.NewRows([]string{"id"}).AddRow("inc_1"))
+
+	mock.ExpectExec("INSERT INTO stale_verifications").
+		WithArgs("inc_1").
+		WillReturnResult(sqlmock.NewResult(1, 1))
+
+	err := s.checkAndEnqueueStaleIncidentVerifications(now)
+	require.NoError(t, err)
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestProcessCompletedStaleIncidentVerifications_Recovered(t *testing.T) {
+	s, mock := newMockScheduler(t, SchedulerConfig{
+		EnableStaleVerification: true,
+	})
+
+	now := time.Now()
+	verifiedAt := now.Add(-5 * time.Minute)
+	lastEventAt := verifiedAt.Add(-10 * time.Minute)
+
+	mock.ExpectQuery("SELECT sv.incident_id, COALESCE.*FROM stale_verifications sv").
+		WillReturnRows(sqlmock.NewRows([]string{
+			"incident_id", "verdict", "reason", "attempts", "verified_at",
+			"title", "severity", "environment", "affected_services", "last_event_at",
+		}).AddRow("inc_1", "recovered", "Target up=1", 0, verifiedAt, "Down", "critical", "prod", []byte(`["api"]`), lastEventAt))
+
+	mock.ExpectExec("UPDATE incidents.*SET status = 'resolved'").
+		WithArgs(verifiedAt, "inc_1").
+		WillReturnResult(sqlmock.NewResult(0, 1))
+
+	mock.ExpectExec("UPDATE stale_verifications SET reported_at = now").
+		WithArgs("inc_1").
+		WillReturnResult(sqlmock.NewResult(0, 1))
+
+	err := s.processCompletedStaleIncidentVerifications(now)
+	require.NoError(t, err)
+	require.NoError(t, mock.ExpectationsWereMet())
+}

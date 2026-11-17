@@ -29,6 +29,12 @@ type Config struct {
 	// /healthz, /ready and /metrics are exempt.
 	RateLimitRPS   float64
 	RateLimitBurst int
+
+	// Stale-incident verification (see stale-incident-verification.md)
+	EnableStaleVerification  bool
+	IncidentStaleAfter       time.Duration
+	StaleReverifyBaseBackoff time.Duration
+	StaleReverifyMaxBackoff  time.Duration
 }
 
 func Load() Config {
@@ -89,6 +95,18 @@ func Load() Config {
 	if err := v.BindEnv("rate_limit_burst", "RATE_LIMIT_BURST"); err != nil {
 		panic(fmt.Sprintf("failed to bind RATE_LIMIT_BURST env: %v", err))
 	}
+	if err := v.BindEnv("enable_stale_verification", "ENABLE_STALE_VERIFICATION"); err != nil {
+		panic(fmt.Sprintf("failed to bind ENABLE_STALE_VERIFICATION env: %v", err))
+	}
+	if err := v.BindEnv("incident_stale_after", "INCIDENT_STALE_AFTER"); err != nil {
+		panic(fmt.Sprintf("failed to bind INCIDENT_STALE_AFTER env: %v", err))
+	}
+	if err := v.BindEnv("stale_reverify_base_backoff", "STALE_REVERIFY_BASE_BACKOFF"); err != nil {
+		panic(fmt.Sprintf("failed to bind STALE_REVERIFY_BASE_BACKOFF env: %v", err))
+	}
+	if err := v.BindEnv("stale_reverify_max_backoff", "STALE_REVERIFY_MAX_BACKOFF"); err != nil {
+		panic(fmt.Sprintf("failed to bind STALE_REVERIFY_MAX_BACKOFF env: %v", err))
+	}
 
 	// Defaults
 	v.SetDefault("port", "8080")
@@ -104,6 +122,10 @@ func Load() Config {
 	v.SetDefault("default_timezone", "Asia/Jakarta")
 	v.SetDefault("rate_limit_rps", 10)
 	v.SetDefault("rate_limit_burst", 20)
+	v.SetDefault("enable_stale_verification", true)
+	v.SetDefault("incident_stale_after", "6h")
+	v.SetDefault("stale_reverify_base_backoff", "1h")
+	v.SetDefault("stale_reverify_max_backoff", "24h")
 
 	if err := v.ReadInConfig(); err != nil {
 		if _, ok := err.(viper.ConfigFileNotFoundError); !ok {
@@ -115,23 +137,39 @@ func Load() Config {
 	if err != nil {
 		panic(fmt.Sprintf("invalid check_interval: %v", err))
 	}
+	incidentStaleAfter, err := time.ParseDuration(v.GetString("incident_stale_after"))
+	if err != nil {
+		panic(fmt.Sprintf("invalid incident_stale_after: %v", err))
+	}
+	staleReverifyBaseBackoff, err := time.ParseDuration(v.GetString("stale_reverify_base_backoff"))
+	if err != nil {
+		panic(fmt.Sprintf("invalid stale_reverify_base_backoff: %v", err))
+	}
+	staleReverifyMaxBackoff, err := time.ParseDuration(v.GetString("stale_reverify_max_backoff"))
+	if err != nil {
+		panic(fmt.Sprintf("invalid stale_reverify_max_backoff: %v", err))
+	}
 
 	cfg := Config{
-		DatabaseURL:             v.GetString("database_url"),
-		Port:                    v.GetString("port"),
-		LogLevel:                v.GetString("log_level"),
-		Environment:             v.GetString("environment"),
-		ReporterURL:             v.GetString("reporter_url"),
-		ServiceToken:            v.GetString("service_token"),
-		DailyReportTime:         v.GetString("daily_report_time"),
-		HighSeverityThreshold:   v.GetString("high_severity_threshold"),
-		CheckInterval:           checkInterval,
-		EnableDailyReport:       v.GetBool("enable_daily_report"),
-		EnableHighSeverityAlert: v.GetBool("enable_high_severity_alert"),
-		Mode:                    v.GetString("mode"),
-		DefaultTimezone:         v.GetString("default_timezone"),
-		RateLimitRPS:            v.GetFloat64("rate_limit_rps"),
-		RateLimitBurst:          v.GetInt("rate_limit_burst"),
+		DatabaseURL:              v.GetString("database_url"),
+		Port:                     v.GetString("port"),
+		LogLevel:                 v.GetString("log_level"),
+		Environment:              v.GetString("environment"),
+		ReporterURL:              v.GetString("reporter_url"),
+		ServiceToken:             v.GetString("service_token"),
+		DailyReportTime:          v.GetString("daily_report_time"),
+		HighSeverityThreshold:    v.GetString("high_severity_threshold"),
+		CheckInterval:            checkInterval,
+		EnableDailyReport:        v.GetBool("enable_daily_report"),
+		EnableHighSeverityAlert:  v.GetBool("enable_high_severity_alert"),
+		Mode:                     v.GetString("mode"),
+		DefaultTimezone:          v.GetString("default_timezone"),
+		RateLimitRPS:             v.GetFloat64("rate_limit_rps"),
+		RateLimitBurst:           v.GetInt("rate_limit_burst"),
+		EnableStaleVerification:  v.GetBool("enable_stale_verification"),
+		IncidentStaleAfter:       incidentStaleAfter,
+		StaleReverifyBaseBackoff: staleReverifyBaseBackoff,
+		StaleReverifyMaxBackoff:  staleReverifyMaxBackoff,
 	}
 
 	if err := cfg.Validate(); err != nil {

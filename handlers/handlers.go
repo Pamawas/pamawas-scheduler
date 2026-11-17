@@ -27,14 +27,18 @@ type Handler struct {
 // NewHandler creates a new handler with dependencies
 func NewHandler(db *sql.DB, cfg config.Config, m *metrics.Metrics) *Handler {
 	schedulerCfg := service.SchedulerConfig{
-		ReporterURL:             cfg.ReporterURL,
-		ServiceToken:            cfg.ServiceToken,
-		DailyReportTime:         cfg.DailyReportTime,
-		HighSeverityThreshold:   cfg.HighSeverityThreshold,
-		CheckInterval:           cfg.CheckInterval,
-		EnableDailyReport:       cfg.EnableDailyReport,
-		EnableHighSeverityAlert: cfg.EnableHighSeverityAlert,
-		DefaultTimezone:         cfg.DefaultTimezone,
+		ReporterURL:              cfg.ReporterURL,
+		ServiceToken:             cfg.ServiceToken,
+		DailyReportTime:          cfg.DailyReportTime,
+		HighSeverityThreshold:    cfg.HighSeverityThreshold,
+		CheckInterval:            cfg.CheckInterval,
+		EnableDailyReport:        cfg.EnableDailyReport,
+		EnableHighSeverityAlert:  cfg.EnableHighSeverityAlert,
+		DefaultTimezone:          cfg.DefaultTimezone,
+		EnableStaleVerification:  cfg.EnableStaleVerification,
+		IncidentStaleAfter:       cfg.IncidentStaleAfter,
+		StaleReverifyBaseBackoff: cfg.StaleReverifyBaseBackoff,
+		StaleReverifyMaxBackoff:  cfg.StaleReverifyMaxBackoff,
 	}
 
 	scheduler := service.NewScheduler(db, schedulerCfg, m)
