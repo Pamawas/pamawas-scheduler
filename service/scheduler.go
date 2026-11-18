@@ -45,6 +45,10 @@ type SchedulerConfig struct {
 	IncidentStaleAfter       time.Duration
 	StaleReverifyBaseBackoff time.Duration
 	StaleReverifyMaxBackoff  time.Duration
+
+	// Stalled delivery recovery (operational)
+	EnableStalledDeliveryRecovery   bool
+	StalledDeliveryRecoveryInterval time.Duration
 }
 
 // ReporterClient is a client for triggering reports via the reporter service
@@ -172,6 +176,42 @@ func (c *ReporterClient) SendVerifyReport(ctx context.Context, payload VerifyRep
 	return nil
 }
 
+// RecoverStalledDeliveries asks the reporter to reclaim delivery attempts whose
+// lease expired mid-send (leaked leases). Returns the number recovered.
+func (c *ReporterClient) RecoverStalledDeliveries(ctx context.Context) (int, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.baseURL+"/api/v1/retry-stalled-deliveries", nil)
+	if err != nil {
+		return 0, err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	if c.serviceToken != "" {
+		req.Header.Set("X-Service-Token", c.serviceToken)
+	}
+	otel.GetTextMapPropagator().Inject(ctx, propagation.HeaderCarrier(req.Header))
+
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return 0, err
+	}
+	defer func() {
+		if closeErr := resp.Body.Close(); closeErr != nil {
+			log.Error().Err(closeErr).Msg("Failed to close response body")
+		}
+	}()
+
+	if resp.StatusCode != http.StatusOK {
+		return 0, fmt.Errorf("reporter retry-stalled-deliveries returned %d", resp.StatusCode)
+	}
+
+	var result struct {
+		Recovered int `json:"recovered"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		return 0, fmt.Errorf("failed to decode recovery response: %w", err)
+	}
+	return result.Recovered, nil
+}
+
 // Close waits for any in-flight async report sends to complete. The caller
 // should cancel the client context (via Scheduler.Stop) first so that requests
 // still in-flight are aborted promptly instead of waiting out the full client
@@ -219,7 +259,7 @@ func NewScheduler(db *sql.DB, cfg SchedulerConfig, m *metrics.Metrics) *Schedule
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	reporter := NewReporterClient(cfg.ReporterURL, cfg.ServiceToken, ctx)
-	return &Scheduler{
+	s := &Scheduler{
 		db:         db,
 		config:     cfg,
 		ctx:        ctx,
@@ -228,6 +268,11 @@ func NewScheduler(db *sql.DB, cfg SchedulerConfig, m *metrics.Metrics) *Schedule
 		reporter:   reporter,
 		metrics:    m,
 	}
+	// Start stalled delivery recovery loop (1h default, prevents flooding)
+	if cfg.EnableStalledDeliveryRecovery {
+		go s.runStalledDeliveryRecovery()
+	}
+	return s
 }
 
 // leaderLockID is the fixed advisory-lock key for scheduler leadership.
@@ -1036,6 +1081,36 @@ func (s *Scheduler) Stop() {
 	// cancelled above, so these abort promptly rather than waiting out the full
 	// client timeout.
 	s.reporter.Close()
+}
+
+// runStalledDeliveryRecovery runs a background loop that periodically asks the
+// reporter to reclaim delivery attempts whose lease expired mid-send. The
+// interval is configurable (default 1h) to avoid flooding the endpoint.
+func (s *Scheduler) runStalledDeliveryRecovery() {
+	interval := s.config.StalledDeliveryRecoveryInterval
+	if interval <= 0 {
+		interval = 1 * time.Hour
+	}
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-s.ctx.Done():
+			return
+		case <-ticker.C:
+			recovered, err := s.reporter.RecoverStalledDeliveries(s.ctx)
+			if err != nil {
+				log.Warn().Err(err).Msg("Failed to recover stalled deliveries")
+				continue
+			}
+			if recovered > 0 {
+				log.Info().Int("recovered", recovered).
+					Msg("Recovered stalled delivery attempts")
+				s.metrics.StalledDeliveriesRecoveredTotal.Add(float64(recovered))
+			}
+		}
+	}
 }
 
 // MuLock locks the scheduler mutex

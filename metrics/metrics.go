@@ -7,15 +7,16 @@ import (
 
 // Metrics holds all Prometheus metrics for the scheduler service
 type Metrics struct {
-	DailyReportsTotal       prometheus.Counter
-	HighSeverityChecksTotal prometheus.Counter
-	HighSeverityAlertsTotal prometheus.Counter
-	DBConnectionErrors      prometheus.Counter
-	LastDailyReport         prometheus.Gauge
-	LastHighSeverityCheck   prometheus.Gauge
-	SchedulerRunning        prometheus.Gauge
-	SchedulerUptime         prometheus.Gauge
-	SchedulerLeader         prometheus.Gauge
+	DailyReportsTotal               prometheus.Counter
+	HighSeverityChecksTotal         prometheus.Counter
+	HighSeverityAlertsTotal         prometheus.Counter
+	DBConnectionErrors              prometheus.Counter
+	LastDailyReport                 prometheus.Gauge
+	LastHighSeverityCheck           prometheus.Gauge
+	SchedulerRunning                prometheus.Gauge
+	SchedulerUptime                 prometheus.Gauge
+	SchedulerLeader                 prometheus.Gauge
+	StalledDeliveriesRecoveredTotal prometheus.Counter
 }
 
 // NewMetrics creates and registers all metrics.
@@ -94,6 +95,14 @@ func NewMetrics() *Metrics {
 				Subsystem: "scheduler",
 				Name:      "leader",
 				Help:      "Whether this instance holds scheduler leadership (1) or not (0)",
+			},
+		),
+		StalledDeliveriesRecoveredTotal: promauto.NewCounter(
+			prometheus.CounterOpts{
+				Namespace: "pamawas",
+				Subsystem: "scheduler",
+				Name:      "stalled_deliveries_recovered_total",
+				Help:      "Total number of stalled delivery attempts recovered",
 			},
 		),
 	}
