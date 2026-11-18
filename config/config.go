@@ -41,6 +41,95 @@ type Config struct {
 	StalledDeliveryRecoveryInterval time.Duration
 }
 
+// envBindings maps each config key to the environment variables that may set
+// it, in precedence order. It is a table rather than a sequence of BindEnv
+// calls so Load stays readable and the linter's cognitive-complexity budget is
+// spent on parsing, not on twenty identical error checks.
+var envBindings = map[string][]string{
+	"database_url":                       {"DATABASE_URL", "PAMAWAS_SCHEDULER_DATABASE_URL"},
+	"port":                               {"PORT", "PAMAWAS_SCHEDULER_PORT"},
+	"log_level":                          {"LOG_LEVEL", "PAMAWAS_SCHEDULER_LOG_LEVEL"},
+	"environment":                        {"ENVIRONMENT", "PAMAWAS_SCHEDULER_ENVIRONMENT"},
+	"service_token":                      {"PAMAWAS_SERVICE_TOKEN"},
+	"reporter_url":                       {"REPORTER_URL", "PAMAWAS_SCHEDULER_REPORTER_URL"},
+	"daily_report_time":                  {"DAILY_REPORT_TIME", "PAMAWAS_SCHEDULER_DAILY_REPORT_TIME"},
+	"high_severity_threshold":            {"HIGH_SEVERITY_THRESHOLD", "PAMAWAS_SCHEDULER_HIGH_SEVERITY_THRESHOLD"},
+	"check_interval":                     {"CHECK_INTERVAL", "PAMAWAS_SCHEDULER_CHECK_INTERVAL"},
+	"enable_daily_report":                {"ENABLE_DAILY_REPORT", "PAMAWAS_SCHEDULER_ENABLE_DAILY_REPORT"},
+	"enable_high_severity_alert":         {"ENABLE_HIGH_SEVERITY_ALERT", "PAMAWAS_SCHEDULER_ENABLE_HIGH_SEVERITY_ALERT"},
+	"mode":                               {"SCHEDULER_MODE", "PAMAWAS_SCHEDULER_MODE"},
+	"default_timezone":                   {"DEFAULT_TIMEZONE", "PAMAWAS_SCHEDULER_DEFAULT_TIMEZONE"},
+	"otel_exporter_otlp_endpoint":        {"OTEL_EXPORTER_OTLP_ENDPOINT", "PAMAWAS_SCHEDULER_OTEL_EXPORTER_OTLP_ENDPOINT"},
+	"rate_limit_rps":                     {"RATE_LIMIT_RPS"},
+	"rate_limit_burst":                   {"RATE_LIMIT_BURST"},
+	"enable_stale_verification":          {"ENABLE_STALE_VERIFICATION"},
+	"incident_stale_after":               {"INCIDENT_STALE_AFTER"},
+	"stale_reverify_base_backoff":        {"STALE_REVERIFY_BASE_BACKOFF"},
+	"stale_reverify_max_backoff":         {"STALE_REVERIFY_MAX_BACKOFF"},
+	"enable_stalled_delivery_recovery":   {"ENABLE_STALLED_DELIVERY_RECOVERY"},
+	"stalled_delivery_recovery_interval": {"STALLED_DELIVERY_RECOVERY_INTERVAL"},
+}
+
+// configDefaults are the values used when neither the config file nor the
+// environment supplies a key.
+var configDefaults = map[string]interface{}{
+	"port":                               "8080",
+	"log_level":                          "info",
+	"environment":                        "development",
+	"reporter_url":                       "http://pamawas-reporter:8080",
+	"daily_report_time":                  "07:00",
+	"high_severity_threshold":            "high",
+	"check_interval":                     "30s",
+	"enable_daily_report":                true,
+	"enable_high_severity_alert":         true,
+	"mode":                               "auto",
+	"default_timezone":                   "Asia/Jakarta",
+	"rate_limit_rps":                     10,
+	"rate_limit_burst":                   20,
+	"enable_stale_verification":          true,
+	"incident_stale_after":               "6h",
+	"stale_reverify_base_backoff":        "1h",
+	"stale_reverify_max_backoff":         "24h",
+	"enable_stalled_delivery_recovery":   true,
+	"stalled_delivery_recovery_interval": "1h",
+}
+
+// bindEnv wires every table-driven binding into v.
+func bindEnv(v *viper.Viper) {
+	for key, envs := range envBindings {
+		if err := v.BindEnv(append([]string{key}, envs...)...); err != nil {
+			panic(fmt.Sprintf("failed to bind %s env: %v", key, err))
+		}
+	}
+}
+
+// setDefaults installs the documented fallback for every key.
+func setDefaults(v *viper.Viper) {
+	for key, value := range configDefaults {
+		v.SetDefault(key, value)
+	}
+}
+
+// mustDuration parses a duration-valued key, panicking with the key name on a
+// bad value. Every duration is validated at startup because a typo here would
+// otherwise surface as a zero interval deep inside a background loop.
+func mustDuration(v *viper.Viper, key string) time.Duration {
+	d, err := time.ParseDuration(v.GetString(key))
+	if err != nil {
+		panic(fmt.Sprintf("invalid %s: %v", key, err))
+	}
+	return d
+}
+
+// durationKeys are the keys parsed with mustDuration when building Config.
+var durationKeys = []string{
+	"check_interval",
+	"incident_stale_after",
+	"stale_reverify_base_backoff",
+	"stale_reverify_max_backoff",
+	"stalled_delivery_recovery_interval",
+}
+
 func Load() Config {
 	v := viper.New()
 	v.SetConfigName("config")
@@ -51,93 +140,8 @@ func Load() Config {
 	v.SetEnvPrefix("PAMAWAS_SCHEDULER")
 	// Don't use AutomaticEnv() - Kubernetes injects PAMAWAS_SCHEDULER_PORT=tcp://IP:PORT
 	// which would override our config. Explicitly bind only what we need.
-	if err := v.BindEnv("database_url", "DATABASE_URL", "PAMAWAS_SCHEDULER_DATABASE_URL"); err != nil {
-		panic(fmt.Sprintf("failed to bind DATABASE_URL env: %v", err))
-	}
-	if err := v.BindEnv("port", "PORT", "PAMAWAS_SCHEDULER_PORT"); err != nil {
-		panic(fmt.Sprintf("failed to bind PORT env: %v", err))
-	}
-	if err := v.BindEnv("log_level", "LOG_LEVEL", "PAMAWAS_SCHEDULER_LOG_LEVEL"); err != nil {
-		panic(fmt.Sprintf("failed to bind LOG_LEVEL env: %v", err))
-	}
-	if err := v.BindEnv("environment", "ENVIRONMENT", "PAMAWAS_SCHEDULER_ENVIRONMENT"); err != nil {
-		panic(fmt.Sprintf("failed to bind ENVIRONMENT env: %v", err))
-	}
-	if err := v.BindEnv("service_token", "PAMAWAS_SERVICE_TOKEN"); err != nil {
-		panic(fmt.Sprintf("failed to bind PAMAWAS_SERVICE_TOKEN env: %v", err))
-	}
-	if err := v.BindEnv("reporter_url", "REPORTER_URL", "PAMAWAS_SCHEDULER_REPORTER_URL"); err != nil {
-		panic(fmt.Sprintf("failed to bind REPORTER_URL env: %v", err))
-	}
-	if err := v.BindEnv("daily_report_time", "DAILY_REPORT_TIME", "PAMAWAS_SCHEDULER_DAILY_REPORT_TIME"); err != nil {
-		panic(fmt.Sprintf("failed to bind DAILY_REPORT_TIME env: %v", err))
-	}
-	if err := v.BindEnv("high_severity_threshold", "HIGH_SEVERITY_THRESHOLD", "PAMAWAS_SCHEDULER_HIGH_SEVERITY_THRESHOLD"); err != nil {
-		panic(fmt.Sprintf("failed to bind HIGH_SEVERITY_THRESHOLD env: %v", err))
-	}
-	if err := v.BindEnv("check_interval", "CHECK_INTERVAL", "PAMAWAS_SCHEDULER_CHECK_INTERVAL"); err != nil {
-		panic(fmt.Sprintf("failed to bind CHECK_INTERVAL env: %v", err))
-	}
-	if err := v.BindEnv("enable_daily_report", "ENABLE_DAILY_REPORT", "PAMAWAS_SCHEDULER_ENABLE_DAILY_REPORT"); err != nil {
-		panic(fmt.Sprintf("failed to bind ENABLE_DAILY_REPORT env: %v", err))
-	}
-	if err := v.BindEnv("enable_high_severity_alert", "ENABLE_HIGH_SEVERITY_ALERT", "PAMAWAS_SCHEDULER_ENABLE_HIGH_SEVERITY_ALERT"); err != nil {
-		panic(fmt.Sprintf("failed to bind ENABLE_HIGH_SEVERITY_ALERT env: %v", err))
-	}
-	if err := v.BindEnv("mode", "SCHEDULER_MODE", "PAMAWAS_SCHEDULER_MODE"); err != nil {
-		panic(fmt.Sprintf("failed to bind SCHEDULER_MODE env: %v", err))
-	}
-	if err := v.BindEnv("default_timezone", "DEFAULT_TIMEZONE", "PAMAWAS_SCHEDULER_DEFAULT_TIMEZONE"); err != nil {
-		panic(fmt.Sprintf("failed to bind DEFAULT_TIMEZONE env: %v", err))
-	}
-	if err := v.BindEnv("otel_exporter_otlp_endpoint", "OTEL_EXPORTER_OTLP_ENDPOINT", "PAMAWAS_SCHEDULER_OTEL_EXPORTER_OTLP_ENDPOINT"); err != nil {
-		panic(fmt.Sprintf("failed to bind OTEL_EXPORTER_OTLP_ENDPOINT env: %v", err))
-	}
-	if err := v.BindEnv("rate_limit_rps", "RATE_LIMIT_RPS"); err != nil {
-		panic(fmt.Sprintf("failed to bind RATE_LIMIT_RPS env: %v", err))
-	}
-	if err := v.BindEnv("rate_limit_burst", "RATE_LIMIT_BURST"); err != nil {
-		panic(fmt.Sprintf("failed to bind RATE_LIMIT_BURST env: %v", err))
-	}
-	if err := v.BindEnv("enable_stale_verification", "ENABLE_STALE_VERIFICATION"); err != nil {
-		panic(fmt.Sprintf("failed to bind ENABLE_STALE_VERIFICATION env: %v", err))
-	}
-	if err := v.BindEnv("incident_stale_after", "INCIDENT_STALE_AFTER"); err != nil {
-		panic(fmt.Sprintf("failed to bind INCIDENT_STALE_AFTER env: %v", err))
-	}
-	if err := v.BindEnv("stale_reverify_base_backoff", "STALE_REVERIFY_BASE_BACKOFF"); err != nil {
-		panic(fmt.Sprintf("failed to bind STALE_REVERIFY_BASE_BACKOFF env: %v", err))
-	}
-	if err := v.BindEnv("stale_reverify_max_backoff", "STALE_REVERIFY_MAX_BACKOFF"); err != nil {
-		panic(fmt.Sprintf("failed to bind STALE_REVERIFY_MAX_BACKOFF env: %v", err))
-	}
-	if err := v.BindEnv("enable_stalled_delivery_recovery", "ENABLE_STALLED_DELIVERY_RECOVERY"); err != nil {
-		panic(fmt.Sprintf("failed to bind ENABLE_STALLED_DELIVERY_RECOVERY env: %v", err))
-	}
-	if err := v.BindEnv("stalled_delivery_recovery_interval", "STALLED_DELIVERY_RECOVERY_INTERVAL"); err != nil {
-		panic(fmt.Sprintf("failed to bind STALLED_DELIVERY_RECOVERY_INTERVAL env: %v", err))
-	}
-
-	// Defaults
-	v.SetDefault("port", "8080")
-	v.SetDefault("log_level", "info")
-	v.SetDefault("environment", "development")
-	v.SetDefault("reporter_url", "http://pamawas-reporter:8080")
-	v.SetDefault("daily_report_time", "07:00")
-	v.SetDefault("high_severity_threshold", "high")
-	v.SetDefault("check_interval", "30s")
-	v.SetDefault("enable_daily_report", true)
-	v.SetDefault("enable_high_severity_alert", true)
-	v.SetDefault("mode", "auto")
-	v.SetDefault("default_timezone", "Asia/Jakarta")
-	v.SetDefault("rate_limit_rps", 10)
-	v.SetDefault("rate_limit_burst", 20)
-	v.SetDefault("enable_stale_verification", true)
-	v.SetDefault("incident_stale_after", "6h")
-	v.SetDefault("stale_reverify_base_backoff", "1h")
-	v.SetDefault("stale_reverify_max_backoff", "24h")
-	v.SetDefault("enable_stalled_delivery_recovery", true)
-	v.SetDefault("stalled_delivery_recovery_interval", "1h")
+	bindEnv(v)
+	setDefaults(v)
 
 	if err := v.ReadInConfig(); err != nil {
 		if _, ok := err.(viper.ConfigFileNotFoundError); !ok {
@@ -145,25 +149,9 @@ func Load() Config {
 		}
 	}
 
-	checkInterval, err := time.ParseDuration(v.GetString("check_interval"))
-	if err != nil {
-		panic(fmt.Sprintf("invalid check_interval: %v", err))
-	}
-	incidentStaleAfter, err := time.ParseDuration(v.GetString("incident_stale_after"))
-	if err != nil {
-		panic(fmt.Sprintf("invalid incident_stale_after: %v", err))
-	}
-	staleReverifyBaseBackoff, err := time.ParseDuration(v.GetString("stale_reverify_base_backoff"))
-	if err != nil {
-		panic(fmt.Sprintf("invalid stale_reverify_base_backoff: %v", err))
-	}
-	staleReverifyMaxBackoff, err := time.ParseDuration(v.GetString("stale_reverify_max_backoff"))
-	if err != nil {
-		panic(fmt.Sprintf("invalid stale_reverify_max_backoff: %v", err))
-	}
-	stalledRecoveryInterval, err := time.ParseDuration(v.GetString("stalled_delivery_recovery_interval"))
-	if err != nil {
-		panic(fmt.Sprintf("invalid stalled_delivery_recovery_interval: %v", err))
+	durations := make(map[string]time.Duration, len(durationKeys))
+	for _, key := range durationKeys {
+		durations[key] = mustDuration(v, key)
 	}
 
 	cfg := Config{
@@ -175,7 +163,7 @@ func Load() Config {
 		ServiceToken:                    v.GetString("service_token"),
 		DailyReportTime:                 v.GetString("daily_report_time"),
 		HighSeverityThreshold:           v.GetString("high_severity_threshold"),
-		CheckInterval:                   checkInterval,
+		CheckInterval:                   durations["check_interval"],
 		EnableDailyReport:               v.GetBool("enable_daily_report"),
 		EnableHighSeverityAlert:         v.GetBool("enable_high_severity_alert"),
 		Mode:                            v.GetString("mode"),
@@ -183,11 +171,11 @@ func Load() Config {
 		RateLimitRPS:                    v.GetFloat64("rate_limit_rps"),
 		RateLimitBurst:                  v.GetInt("rate_limit_burst"),
 		EnableStaleVerification:         v.GetBool("enable_stale_verification"),
-		IncidentStaleAfter:              incidentStaleAfter,
-		StaleReverifyBaseBackoff:        staleReverifyBaseBackoff,
-		StaleReverifyMaxBackoff:         staleReverifyMaxBackoff,
+		IncidentStaleAfter:              durations["incident_stale_after"],
+		StaleReverifyBaseBackoff:        durations["stale_reverify_base_backoff"],
+		StaleReverifyMaxBackoff:         durations["stale_reverify_max_backoff"],
 		EnableStalledDeliveryRecovery:   v.GetBool("enable_stalled_delivery_recovery"),
-		StalledDeliveryRecoveryInterval: stalledRecoveryInterval,
+		StalledDeliveryRecoveryInterval: durations["stalled_delivery_recovery_interval"],
 	}
 
 	if err := cfg.Validate(); err != nil {
