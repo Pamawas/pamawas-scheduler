@@ -17,6 +17,7 @@ type Metrics struct {
 	SchedulerUptime                 prometheus.Gauge
 	SchedulerLeader                 prometheus.Gauge
 	StalledDeliveriesRecoveredTotal prometheus.Counter
+	StalledDeliveriesDetectedTotal  prometheus.Gauge
 }
 
 // NewMetrics creates and registers all metrics.
@@ -103,6 +104,14 @@ func NewMetrics() *Metrics {
 				Subsystem: "scheduler",
 				Name:      "stalled_deliveries_recovered_total",
 				Help:      "Total number of stalled delivery attempts recovered",
+			},
+		),
+		StalledDeliveriesDetectedTotal: promauto.NewGauge(
+			prometheus.GaugeOpts{
+				Namespace: "pamawas",
+				Subsystem: "scheduler",
+				Name:      "stalled_deliveries_detected_total",
+				Help:      "Current number of stalled delivery attempts (lease expired, not yet reclaimed)",
 			},
 		),
 	}

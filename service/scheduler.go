@@ -1083,9 +1083,31 @@ func (s *Scheduler) Stop() {
 	s.reporter.Close()
 }
 
+// countStalledDeliveries reports how many delivery attempts currently hold an
+// expired 'sending' lease. This is a read-only probe against the same database
+// the reporter uses, so it still works when the reporter itself is unreachable
+// — which is exactly when an operator needs the signal.
+func (s *Scheduler) countStalledDeliveries(ctx context.Context) (int, error) {
+	var count int
+	err := s.db.QueryRowContext(ctx, `
+		SELECT count(*)
+		FROM delivery_attempts
+		WHERE status = 'sending'
+		  AND lease_expires_at IS NOT NULL
+		  AND lease_expires_at < now()
+	`).Scan(&count)
+	if err != nil {
+		return 0, err
+	}
+	return count, nil
+}
+
 // runStalledDeliveryRecovery runs a background loop that periodically asks the
 // reporter to reclaim delivery attempts whose lease expired mid-send. The
 // interval is configurable (default 1h) to avoid flooding the endpoint.
+//
+// Each tick detects stuck rows first (so the gauge reflects reality even when
+// recovery fails), then asks the reporter to reclaim them.
 func (s *Scheduler) runStalledDeliveryRecovery() {
 	interval := s.config.StalledDeliveryRecoveryInterval
 	if interval <= 0 {
@@ -1099,6 +1121,17 @@ func (s *Scheduler) runStalledDeliveryRecovery() {
 		case <-s.ctx.Done():
 			return
 		case <-ticker.C:
+			detected, err := s.countStalledDeliveries(s.ctx)
+			if err != nil {
+				log.Warn().Err(err).Msg("Failed to count stalled deliveries")
+			} else {
+				s.metrics.StalledDeliveriesDetectedTotal.Set(float64(detected))
+				if detected > 0 {
+					log.Warn().Int("detected", detected).
+						Msg("Detected stalled delivery attempts")
+				}
+			}
+
 			recovered, err := s.reporter.RecoverStalledDeliveries(s.ctx)
 			if err != nil {
 				log.Warn().Err(err).Msg("Failed to recover stalled deliveries")
@@ -1108,6 +1141,13 @@ func (s *Scheduler) runStalledDeliveryRecovery() {
 				log.Info().Int("recovered", recovered).
 					Msg("Recovered stalled delivery attempts")
 				s.metrics.StalledDeliveriesRecoveredTotal.Add(float64(recovered))
+				// The reclaim query just cleared these rows, so the gauge should
+				// not keep reporting them as stuck until the next tick.
+				remaining := detected - recovered
+				if remaining < 0 {
+					remaining = 0
+				}
+				s.metrics.StalledDeliveriesDetectedTotal.Set(float64(remaining))
 			}
 		}
 	}
