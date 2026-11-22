@@ -1370,6 +1370,7 @@ func (s *Scheduler) checkAndEnqueueStaleIncidentVerifications(now time.Time) err
 			VALUES ($1, 'queued', 0, now(), now(), now())
 			ON CONFLICT (incident_id) DO UPDATE SET
 				status = 'queued',
+				reported_at = NULL,
 				updated_at = now()
 			WHERE stale_verifications.status NOT IN ('queued', 'running')
 			  AND stale_verifications.reported_at IS NOT NULL
