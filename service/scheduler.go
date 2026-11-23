@@ -621,7 +621,7 @@ func (s *Scheduler) CreateHighSeverityReportRequest(ctx context.Context, inciden
 		// for thirty minutes must not produce three identical reports.
 		incidentSpecificHash := GenerateIncidentReportHash(incidentID, ReportPolicyVersion)
 
-		requestID, isDup, err := s.insertReportRequest(ctx, "high_severity", boundaries.PeriodStart, boundaries.PeriodEnd, "UTC", incidentSpecificHash, incidentID)
+		requestID, isDup, err := s.insertReportRequest(ctx, "high_severity", boundaries.PeriodStart, boundaries.PeriodEnd, s.config.DefaultTimezone, incidentSpecificHash, incidentID)
 		if err != nil {
 			log.Error().Err(err).Str("incident_id", incidentID).Msg("Failed to insert high severity report request")
 			continue
@@ -654,7 +654,7 @@ func (s *Scheduler) CreateHighSeverityReportRequest(ctx context.Context, inciden
 				ReportType:      "high_severity",
 				PeriodStart:     boundaries.PeriodStart.Format(time.RFC3339),
 				PeriodEnd:       boundaries.PeriodEnd.Format(time.RFC3339),
-				Timezone:        "UTC",
+				Timezone:        s.config.DefaultTimezone,
 				IncidentIDs:     []string{incidentID},
 			}
 			s.reporter.SendReportRequestAsync(payload)
@@ -916,7 +916,7 @@ func (s *Scheduler) checkHighSeverityFollowUp() error {
 			ReportType:      "high_severity",
 			PeriodStart:     boundaries.PeriodStart.Format(time.RFC3339),
 			PeriodEnd:       boundaries.PeriodEnd.Format(time.RFC3339),
-			Timezone:        "UTC",
+			Timezone:        s.config.DefaultTimezone,
 			IncidentIDs:     []string{incidentID},
 		}
 		s.reporter.SendReportRequestAsync(payload)

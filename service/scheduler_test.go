@@ -223,6 +223,7 @@ func TestCheckHighSeverityFollowUpDispatchesOnTerminal(t *testing.T) {
 		ReporterURL:             server.URL,
 		EnableHighSeverityAlert: true,
 		HighSeverityThreshold:   "high",
+		DefaultTimezone:         "Asia/Jakarta",
 	})
 	defer s.reporter.Close()
 
@@ -247,6 +248,7 @@ func TestCheckHighSeverityFollowUpDispatchesOnTerminal(t *testing.T) {
 		require.Equal(t, "rreq_01TEST123456789012345678901234", payload.RequestID)
 		require.Equal(t, []string{"inc_01TEST111111111111111111111111"}, payload.IncidentIDs)
 		require.Equal(t, "high_severity", payload.ReportType)
+		require.Equal(t, "Asia/Jakarta", payload.Timezone)
 	case <-time.After(time.Second):
 		t.Fatal("follow-up did not dispatch report request after terminal investigation")
 	}
@@ -395,7 +397,10 @@ func TestCreateHighSeverityReportRequest_NoEligible(t *testing.T) {
 }
 
 func TestCreateHighSeverityReportRequest_WithExplicitIncidents(t *testing.T) {
-	s, mock := newMockScheduler(t, SchedulerConfig{ReporterURL: "http://reporter", HighSeverityThreshold: "high"})
+	s, mock := newMockScheduler(t, SchedulerConfig{
+		ReporterURL: "http://reporter", HighSeverityThreshold: "high",
+		DefaultTimezone: "Asia/Jakarta",
+	})
 
 	// Filter eligible incidents
 	mock.ExpectQuery("SELECT id FROM incidents WHERE id = ANY").
@@ -404,7 +409,7 @@ func TestCreateHighSeverityReportRequest_WithExplicitIncidents(t *testing.T) {
 
 	// Insert report request for the incident
 	mock.ExpectQuery("INSERT INTO report_requests").
-		WithArgs(sqlmock.AnyArg(), "high_severity", sqlmock.AnyArg(), sqlmock.AnyArg(), "UTC", sqlmock.AnyArg(), sqlmock.AnyArg()).
+		WithArgs(sqlmock.AnyArg(), "high_severity", sqlmock.AnyArg(), sqlmock.AnyArg(), "Asia/Jakarta", sqlmock.AnyArg(), sqlmock.AnyArg()).
 		WillReturnRows(sqlmock.NewRows([]string{"id", "inserted"}).AddRow("rreq_01TEST987654321098765432109876", true))
 
 	resp, err := s.CreateHighSeverityReportRequest(context.Background(), []string{"inc_01TEST123456789012345678901234"}, false, false)
