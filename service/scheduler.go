@@ -492,7 +492,7 @@ func (s *Scheduler) dispatchPendingDailyRequests() error {
 		  AND rr.status = 'pending'
 		  AND (rr.next_attempt_at IS NULL OR rr.next_attempt_at <= now())
 		  AND NOT EXISTS (SELECT 1 FROM reports r WHERE r.request_id = rr.id)
-		ORDER BY rr.created_at
+		ORDER BY rr.created_at, rr.id
 		LIMIT 20
 	`)
 	if err != nil {
@@ -1340,7 +1340,7 @@ func (s *Scheduler) checkAndEnqueueStaleIncidentVerifications(now time.Time) err
 		      sv.incident_id IS NULL
 		      OR (sv.status IN ('completed', 'failed') AND sv.reported_at IS NOT NULL AND sv.next_verify_at <= $2)
 		  )
-		ORDER BY i.last_event_at ASC
+		ORDER BY i.last_event_at ASC, i.id ASC
 		LIMIT 10
 	`, cutoff, now)
 	if err != nil {
@@ -1428,7 +1428,7 @@ func (s *Scheduler) processCompletedStaleIncidentVerifications(now time.Time) er
 		JOIN incidents i ON i.id = sv.incident_id
 		WHERE sv.status = 'completed'
 		  AND sv.reported_at IS NULL
-		ORDER BY sv.updated_at ASC
+		ORDER BY sv.updated_at ASC, sv.incident_id ASC
 		LIMIT 10
 	`)
 	if err != nil {
