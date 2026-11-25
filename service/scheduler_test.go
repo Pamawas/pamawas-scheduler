@@ -931,3 +931,29 @@ func TestProcessCompletedStaleIncidentVerifications_Recovered(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, mock.ExpectationsWereMet())
 }
+
+func TestProcessCompletedStaleIncidentVerifications_InconclusiveStaysOpen(t *testing.T) {
+	s, mock := newMockScheduler(t, SchedulerConfig{
+		EnableStaleVerification:  true,
+		StaleReverifyBaseBackoff: time.Hour,
+		StaleReverifyMaxBackoff:  24 * time.Hour,
+	})
+
+	now := time.Now()
+	verifiedAt := now.Add(-5 * time.Minute)
+	lastEventAt := verifiedAt.Add(-10 * time.Minute)
+
+	mock.ExpectQuery("SELECT sv.incident_id, COALESCE.*FROM stale_verifications sv").
+		WillReturnRows(sqlmock.NewRows([]string{
+			"incident_id", "verdict", "reason", "attempts", "verified_at",
+			"title", "severity", "environment", "affected_services", "last_event_at",
+		}).AddRow("inc_1", "inconclusive", "Authoritative source unavailable", 0, verifiedAt, "Down", "critical", "prod", []byte(`["api"]`), lastEventAt))
+
+	mock.ExpectExec("UPDATE stale_verifications").
+		WithArgs(now.Add(time.Hour), "inc_1").
+		WillReturnResult(sqlmock.NewResult(0, 1))
+
+	err := s.processCompletedStaleIncidentVerifications(now)
+	require.NoError(t, err)
+	require.NoError(t, mock.ExpectationsWereMet())
+}

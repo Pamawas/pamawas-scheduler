@@ -1413,7 +1413,7 @@ type completedVerificationItem struct {
 }
 
 // processCompletedStaleIncidentVerifications reads completed verification records,
-// resolves recovered incidents, updates back-off for still-down incidents, and dispatches
+// resolves recovered incidents, updates back-off for unresolved incidents, and dispatches
 // verification-outcome cards to the reporter.
 func (s *Scheduler) processCompletedStaleIncidentVerifications(now time.Time) error {
 	if !s.config.EnableStaleVerification || s.db == nil {
@@ -1421,7 +1421,7 @@ func (s *Scheduler) processCompletedStaleIncidentVerifications(now time.Time) er
 	}
 
 	rows, err := s.db.QueryContext(s.ctx, `
-		SELECT sv.incident_id, COALESCE(sv.verdict, 'still_down'), COALESCE(sv.reason, ''), sv.attempts,
+		SELECT sv.incident_id, COALESCE(sv.verdict, 'inconclusive'), COALESCE(sv.reason, ''), sv.attempts,
 		       COALESCE(sv.verified_at, sv.updated_at),
 		       i.title, i.severity, i.environment, i.affected_services, i.last_event_at
 		FROM stale_verifications sv
@@ -1470,7 +1470,7 @@ func (s *Scheduler) processCompletedStaleIncidentVerifications(now time.Time) er
 		if item.verdict == "recovered" {
 			s.processRecoveredVerification(item, target)
 		} else {
-			s.processStillDownVerification(item, target, now)
+			s.processOpenVerification(item, target, now)
 		}
 	}
 	return nil
@@ -1518,7 +1518,11 @@ func (s *Scheduler) processRecoveredVerification(item completedVerificationItem,
 	}
 }
 
-func (s *Scheduler) processStillDownVerification(item completedVerificationItem, target string, now time.Time) {
+func (s *Scheduler) processOpenVerification(item completedVerificationItem, target string, now time.Time) {
+	verdict := item.verdict
+	if verdict != "still_down" && verdict != "inconclusive" {
+		verdict = "inconclusive"
+	}
 	backoff := s.calculateStaleReverifyBackoff(item.attempts)
 	nextVerifyAt := now.Add(backoff)
 
@@ -1531,24 +1535,24 @@ func (s *Scheduler) processStillDownVerification(item completedVerificationItem,
 		WHERE incident_id = $2
 	`, nextVerifyAt, item.incidentID)
 	if err != nil {
-		log.Error().Err(err).Str("incident_id", item.incidentID).Msg("Failed to update backoff for still_down verification")
+		log.Error().Err(err).Str("incident_id", item.incidentID).Str("verdict", verdict).Msg("Failed to update backoff for unresolved verification")
 		return
 	}
-	log.Info().Str("incident_id", item.incidentID).Dur("backoff", backoff).Time("next_verify_at", nextVerifyAt).Msg("Updated back-off for still-down incident verification")
+	log.Info().Str("incident_id", item.incidentID).Str("verdict", verdict).Dur("backoff", backoff).Time("next_verify_at", nextVerifyAt).Msg("Updated back-off for unresolved incident verification")
 
 	// Dispatch verification report card to Reporter
 	if s.reporter != nil {
 		if err := s.reporter.SendVerifyReport(s.ctx, VerifyReportPayload{
 			ContractVersion: 1,
 			IncidentID:      item.incidentID,
-			Verdict:         "still_down",
+			Verdict:         verdict,
 			Title:           item.title,
 			Severity:        item.severity,
 			Environment:     item.environment,
 			Target:          target,
 			Reason:          item.reason,
 		}); err != nil {
-			log.Error().Err(err).Str("incident_id", item.incidentID).Msg("Failed to send still_down verify report to reporter")
+			log.Error().Err(err).Str("incident_id", item.incidentID).Str("verdict", verdict).Msg("Failed to send unresolved verify report to reporter")
 		}
 	}
 }
